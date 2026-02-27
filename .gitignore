@@ -107,6 +107,16 @@ dist
 # Docusaurus cache and generated files
 .docusaurus
 
+# YuGAgent specific
+node_modules/
+dist/
+*.log
+.DS_Store
+.env
+.env.local
+.yugagent/
+.claude/
+
 # Serverless directories
 .serverless/
 
