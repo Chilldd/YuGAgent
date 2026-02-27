@@ -1,0 +1,420 @@
+/**
+ * @fileoverview Main App component for Ink TUI
+ * @module ui/ink/App
+ */
+
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Box, render, StdinContext } from 'ink';
+import type { Stdin } from 'ink';
+
+import { ChatPanel, WelcomeMessage, EmptyState } from './components/ChatPanel.js';
+import { StatusPanel } from './components/StatusPanel.js';
+import { InputBox } from './components/InputBox.js';
+import { colors } from './theme/colors.js';
+
+import type { ChatMessage } from '../../domain/agent/types.js';
+import type { AIService } from '../../application/services/ai-service.js';
+import type { ServiceStatus } from '../../application/dto/chat.dto.js';
+
+/**
+ * Props for the App component
+ */
+export interface AppProps {
+  /** AI service instance */
+  aiService: AIService;
+  /** Application name */
+  appName?: string;
+  /** Application version */
+  version?: string;
+  /** Maximum terminal width */
+  maxWidth?: number;
+}
+
+/**
+ * Main App component state
+ */
+interface AppState {
+  messages: ChatMessage[];
+  streamingContent: string;
+  isStreaming: boolean;
+  status: ServiceStatus;
+  tokenUsage: { promptTokens: number; completionTokens: number; totalTokens: number };
+  model: string;
+  sessionId: string;
+  processingMessage: string;
+  showWelcome: boolean;
+  error: string | null;
+}
+
+/**
+ * Main TUI Application component
+ */
+const App: React.FC<AppProps> = ({
+  aiService,
+  appName = 'YuGAgent',
+  version = '2.0.0',
+  maxWidth = 100,
+}) => {
+  const [state, setState] = useState<AppState>({
+    messages: [],
+    streamingContent: '',
+    isStreaming: false,
+    status: 'initializing' as ServiceStatus,
+    tokenUsage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+    model: '',
+    sessionId: '',
+    processingMessage: '',
+    showWelcome: true,
+    error: null,
+  });
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const isMountedRef = useRef(true);
+
+  // Initialize app and setup event listeners
+  useEffect(() => {
+    isMountedRef.current = true;
+
+    // Get initial status
+    const statusInfo = aiService.getStatus();
+    const sessionId = aiService.getSessionId() || '';
+
+    setState(prev => ({
+      ...prev,
+      status: statusInfo.status,
+      model: statusInfo.model || 'unknown',
+      sessionId,
+      tokenUsage: {
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: statusInfo.totalTokens || 0,
+      },
+    }));
+
+    // Setup event listeners
+    const setupListeners = () => {
+      // Service initialization
+      aiService.on('initialized', (data: any) => {
+        if (isMountedRef.current) {
+          setState(prev => ({
+            ...prev,
+            status: 'idle' as ServiceStatus,
+            sessionId: data.sessionId,
+            showWelcome: true,
+          }));
+        }
+      });
+
+      // Before message - set processing state
+      aiService.on('beforeMessage', (data: any) => {
+        if (isMountedRef.current) {
+          setState(prev => ({
+            ...prev,
+            status: 'processing' as ServiceStatus,
+            processingMessage: 'Sending your message...',
+            showWelcome: false,
+          }));
+        }
+      });
+
+      // Hook events for detailed status
+      aiService.on('hook', (data: any) => {
+        if (!isMountedRef.current) return;
+
+        const { event } = data;
+        switch (event) {
+          case 'start':
+            setState(prev => ({
+              ...prev,
+              status: 'processing' as ServiceStatus,
+              processingMessage: 'Starting conversation...',
+            }));
+            break;
+          case 'thinking':
+            setState(prev => ({
+              ...prev,
+              status: 'processing' as ServiceStatus,
+              processingMessage: 'AI is thinking...',
+            }));
+            break;
+          case 'beforeTool':
+            const toolName = data.data?.toolCall?.name || 'unknown';
+            setState(prev => ({
+              ...prev,
+              processingMessage: `Running tool: ${toolName}...`,
+            }));
+            break;
+          case 'afterTool':
+            setState(prev => ({
+              ...prev,
+              processingMessage: 'Processing tool result...',
+            }));
+            break;
+          case 'complete':
+            setState(prev => ({
+              ...prev,
+              status: 'idle' as ServiceStatus,
+              processingMessage: '',
+            }));
+            break;
+          case 'error':
+            setState(prev => ({
+              ...prev,
+              status: 'error' as ServiceStatus,
+              processingMessage: 'An error occurred',
+              error: data.data?.error?.message || 'Unknown error',
+            }));
+            break;
+        }
+      });
+
+      // After message - update messages and token usage
+      aiService.on('afterMessage', (data: any) => {
+        if (!isMountedRef.current) return;
+
+        const context = aiService.getContext();
+        if (context) {
+          const messages = context.getMessages();
+          setState(prev => ({
+            ...prev,
+            messages: [...messages],
+            status: 'idle' as ServiceStatus,
+            streamingContent: '',
+            isStreaming: false,
+            tokenUsage: data.response?.tokenUsage || prev.tokenUsage,
+            processingMessage: '',
+          }));
+        }
+      });
+
+      // Message error
+      aiService.on('messageError', (data: any) => {
+        if (isMountedRef.current) {
+          setState(prev => ({
+            ...prev,
+            status: 'error' as ServiceStatus,
+            processingMessage: '',
+            error: data.error?.message || 'Failed to send message',
+          }));
+        }
+      });
+
+      // Shutdown
+      aiService.on('shutdown', () => {
+        if (isMountedRef.current) {
+          setState(prev => ({
+            ...prev,
+            status: 'stopped' as ServiceStatus,
+          }));
+        }
+      });
+    };
+
+    setupListeners();
+
+    // Cleanup on unmount
+    return () => {
+      isMountedRef.current = false;
+      aiService.removeAllListeners();
+    };
+  }, [aiService]);
+
+  // Handle user input submission
+  const handleSubmit = useCallback(async (input: string) => {
+    if (!aiService.isReady() || state.isStreaming) {
+      return;
+    }
+
+    setState(prev => ({
+      ...prev,
+      isStreaming: true,
+      streamingContent: '',
+      status: 'processing' as ServiceStatus,
+    }));
+
+    try {
+      const response = await aiService.sendMessage({ message: input });
+
+      // Update messages from context
+      const context = aiService.getContext();
+      if (context) {
+        const messages = context.getMessages();
+        setState(prev => ({
+          ...prev,
+          messages: [...messages],
+          tokenUsage: response.tokenUsage,
+        }));
+      }
+    } catch (error) {
+      setState(prev => ({
+        ...prev,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        status: 'error' as ServiceStatus,
+      }));
+    } finally {
+      setState(prev => ({
+        ...prev,
+        isStreaming: false,
+        streamingContent: '',
+        status: 'idle' as ServiceStatus,
+      }));
+    }
+  }, [aiService, state.isStreaming]);
+
+  // Handle cancel (Ctrl+C)
+  const handleCancel = useCallback(() => {
+    if (state.isStreaming) {
+      // Just stop streaming, don't exit
+      setState(prev => ({
+        ...prev,
+        isStreaming: false,
+        streamingContent: '',
+      }));
+    } else {
+      // Exit the app
+      aiService.shutdown();
+      process.exit(0);
+    }
+  }, [aiService, state.isStreaming]);
+
+  // Get terminal height for chat panel
+  const chatHeight = process.stdout.rows ? Math.max(10, process.stdout.rows - 8) : 20;
+
+  return (
+    <Box flexDirection="column" paddingX={1}>
+      {/* Header with app name */}
+      <Box marginBottom={1}>
+        <Text bold color={colors.primary}>
+          {appName} v{version}
+        </Text>
+        <Text dimColor> | </Text>
+        <StatusIndicator status={state.status} />
+      </Box>
+
+      {/* Main content area */}
+      <Box flexDirection="column" marginBottom={1}>
+        {/* Welcome message or chat panel */}
+        {state.showWelcome ? (
+          <WelcomeMessage
+            appName={appName}
+            version={version}
+            model={state.model}
+            sessionId={state.sessionId}
+            maxWidth={maxWidth - 2}
+          />
+        ) : state.messages.length === 0 ? (
+          <EmptyState maxWidth={maxWidth - 2} />
+        ) : (
+          <ChatPanel
+            messages={state.messages}
+            streamingContent={state.streamingContent}
+            isStreaming={state.isStreaming}
+            maxWidth={maxWidth - 2}
+          />
+        )}
+
+        {/* Error display */}
+        {state.error && (
+          <Box marginTop={1}>
+            <Text color={colors.error}>
+              Error: {state.error}
+            </Text>
+          </Box>
+        )}
+      </Box>
+
+      {/* Status panel */}
+      <StatusPanel
+        status={state.status}
+        tokenUsage={state.tokenUsage}
+        model={state.model}
+        sessionId={state.sessionId}
+        processingMessage={state.processingMessage}
+        maxWidth={maxWidth - 2}
+      />
+
+      {/* Input box */}
+      <Box marginTop={1}>
+        <InputBox
+          prompt=">"
+          placeholder="Type your message..."
+          onSubmit={handleSubmit}
+          onCancel={handleCancel}
+          disabled={state.isStreaming || state.status === 'stopped'}
+          maxLength={2000}
+          maxWidth={maxWidth - 2}
+          showCharCount={false}
+        />
+      </Box>
+
+      {/* Help hint */}
+      <Box marginTop={1}>
+        <Text dimColor>
+          Press <Text color={colors.success}>Enter</Text> to send, <Text color={colors.error}>Ctrl+C</Text> to exit
+        </Text>
+      </Box>
+    </Box>
+  );
+};
+
+/**
+ * Status indicator component (inline)
+ */
+interface StatusIndicatorProps {
+  status: ServiceStatus;
+}
+
+const StatusIndicator: React.FC<StatusIndicatorProps> = ({ status }) => {
+  const getStatusDisplay = () => {
+    switch (status) {
+      case 'idle':
+        return { icon: '●', color: colors.success, label: 'Ready' };
+      case 'processing':
+        return { icon: '◐', color: colors.info, label: 'Processing' };
+      case 'error':
+        return { icon: '●', color: colors.error, label: 'Error' };
+      case 'initializing':
+        return { icon: '○', color: colors.warning, label: 'Init' };
+      case 'stopped':
+        return { icon: '○', color: colors.gray[500], label: 'Stopped' };
+      default:
+        return { icon: '○', color: colors.gray[500], label: 'Unknown' };
+    }
+  };
+
+  const { icon, color, label } = getStatusDisplay();
+
+  return (
+    <Text color={color}>
+      {icon} {label}
+    </Text>
+  );
+};
+
+/**
+ * Start the TUI application
+ *
+ * @param aiService - The AI service instance
+ * @param appName - Application name
+ * @param version - Application version
+ */
+export function startTUI(
+  aiService: AIService,
+  appName = 'YuGAgent',
+  version = '2.0.0'
+): void {
+  const { waitUntilExit } = render(
+    <App
+      aiService={aiService}
+      appName={appName}
+      version={version}
+      maxWidth={Math.min(120, (process.stdout.columns || 80) - 4)}
+    />
+  );
+
+  waitUntilExit().then(() => {
+    aiService.shutdown();
+  });
+}
+
+export default App;

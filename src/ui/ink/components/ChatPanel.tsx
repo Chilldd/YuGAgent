@@ -1,0 +1,214 @@
+/**
+ * @fileoverview Chat panel component for displaying conversation history
+ * @module ui/ink/components/ChatPanel
+ */
+
+import React, { useState, useEffect } from 'react';
+import { Box, Static, Text } from 'ink';
+import { MessageRole, ChatMessage } from '../../../domain/agent/types.js';
+import { MessageBox, StreamMessage } from './MessageBox.js';
+import { colors } from '../theme/colors.js';
+
+/**
+ * Props for the ChatPanel component
+ */
+export interface ChatPanelProps {
+  /** Array of chat messages to display */
+  messages: ChatMessage[];
+  /** Current streaming content (if any) */
+  streamingContent?: string;
+  /** Whether currently streaming */
+  isStreaming?: boolean;
+  /** Maximum width for content wrapping */
+  maxWidth?: number;
+  /** Auto-scroll to bottom flag */
+  autoScroll?: boolean;
+}
+
+/**
+ * Chat panel component with message history display
+ */
+export const ChatPanel: React.FC<ChatPanelProps> = ({
+  messages,
+  streamingContent = '',
+  isStreaming = false,
+  maxWidth = 80,
+  autoScroll = true,
+}) => {
+  // Track content updates for scrolling
+  const [lastUpdate, setLastUpdate] = useState(Date.now());
+
+  useEffect(() => {
+    if (isStreaming || streamingContent) {
+      // Trigger re-render for scrolling during streaming
+      const interval = setInterval(() => {
+        setLastUpdate(Date.now());
+      }, 100);
+
+      return () => clearInterval(interval);
+    }
+  }, [isStreaming, streamingContent]);
+
+  return (
+    <Box flexDirection="column" width={maxWidth}>
+      {/* Message history using Static for non-scrolling content */}
+      <Static items={messages}>
+        {(message, index) => (
+          <ChatMessageItem
+            key={message.metadata?.id || index}
+            message={message}
+            maxWidth={maxWidth}
+          />
+        )}
+      </Static>
+
+      {/* Streaming content (if any) */}
+      {isStreaming && streamingContent && (
+        <StreamMessage
+          content={streamingContent}
+          isStreaming={isStreaming}
+          maxWidth={maxWidth}
+        />
+      )}
+    </Box>
+  );
+};
+
+/**
+ * Props for individual message item
+ */
+interface ChatMessageItemProps {
+  message: ChatMessage;
+  maxWidth: number;
+}
+
+/**
+ * Individual chat message item
+ */
+const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message, maxWidth }) => {
+  // Determine message content
+  let content = message.content;
+  let toolName: string | undefined;
+  let toolSuccess: boolean | undefined;
+
+  // Handle tool messages
+  if (message.role === MessageRole.TOOL) {
+    toolName = message.metadata?.toolName as string;
+    toolSuccess = message.metadata?.success as boolean;
+    content = content || (message.metadata?.output as string) || (message.metadata?.error as string) || '';
+  }
+
+  // Get timestamp from metadata
+  const timestamp = message.metadata?.timestamp
+    ? new Date(message.metadata.timestamp as string)
+    : undefined;
+
+  return (
+    <MessageBox
+      role={message.role}
+      content={content}
+      timestamp={timestamp}
+      toolName={toolName}
+      toolSuccess={toolSuccess}
+      maxWidth={maxWidth}
+    />
+  );
+};
+
+/**
+ * Props for the WelcomeMessage component
+ */
+export interface WelcomeMessageProps {
+  /** Application name */
+  appName?: string;
+  /** Application version */
+  version?: string;
+  /** Model being used */
+  model?: string;
+  /** Session ID */
+  sessionId?: string;
+  /** Maximum width */
+  maxWidth?: number;
+}
+
+/**
+ * Welcome message shown at start of session
+ */
+export const WelcomeMessage: React.FC<WelcomeMessageProps> = ({
+  appName = 'YuGAgent',
+  version = '2.0.0',
+  model,
+  sessionId,
+  maxWidth = 80,
+}) => {
+  const width = Math.min(maxWidth, 60);
+
+  return (
+    <Box
+      flexDirection="column"
+      marginBottom={1}
+      width={maxWidth}
+      borderStyle="double"
+      borderColor={colors.primary}
+      paddingX={1}
+    >
+      {/* Title */}
+      <Box justifyContent="center" marginBottom={1}>
+        <Text bold color={colors.primary} backgroundColor={colors.gray[800]}>
+          {' '.repeat(4)}{appName} v{version}{' '.repeat(4)}
+        </Text>
+      </Box>
+
+      {/* Info */}
+      <Box flexDirection="column">
+        {model && (
+          <Text dimColor>
+            Model: <Text color={colors.info}>{model}</Text>
+          </Text>
+        )}
+        {sessionId && (
+          <Text dimColor>
+            Session: <Text color={colors.gray[400]}>{sessionId.slice(0, 8)}...</Text>
+          </Text>
+        )}
+        <Text dimColor>
+          Type <Text color={colors.success}>Ctrl+C</Text> to exit
+        </Text>
+      </Box>
+    </Box>
+  );
+};
+
+/**
+ * Props for the EmptyState component
+ */
+export interface EmptyStateProps {
+  /** Message to display */
+  message?: string;
+  /** Maximum width */
+  maxWidth?: number;
+}
+
+/**
+ * Empty state shown when no messages
+ */
+export const EmptyState: React.FC<EmptyStateProps> = ({
+  message = 'No messages yet. Start a conversation!',
+  maxWidth = 80,
+}) => {
+  return (
+    <Box
+      flexDirection="column"
+      justifyContent="center"
+      alignItems="center"
+      width={maxWidth}
+      height={10}
+    >
+      <Text dimColor italic>
+        {message}
+      </Text>
+    </Box>
+  );
+};
+
+export default ChatPanel;
