@@ -5,6 +5,7 @@
  * @module index
  */
 
+import 'dotenv/config';
 import { Command } from 'commander';
 import { createApp, shutdownApp } from './di/container.js';
 import { startTUI } from './ui/ink/index.js';
