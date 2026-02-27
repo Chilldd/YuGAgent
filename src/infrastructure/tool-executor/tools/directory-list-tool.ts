@@ -100,28 +100,27 @@ export class DirectoryListTool {
 
     const depthLimit = maxDepth ?? this.maxDepth;
     const entries: DirectoryEntry[] = [];
-    let totalSize = 0;
+    let wasTruncated = false;
 
     // Recursively list directory
-    await this.listDirectory(
+    wasTruncated = await this.listDirectory(
       resolvedPath,
       resolvedPath,
       recursive,
       showHidden,
       0,
       depthLimit,
-      entries,
-      totalSize
+      entries
     );
 
     // Calculate total size
-    totalSize = entries.reduce((sum, entry) => sum + (entry.size || 0), 0);
+    const totalSize = entries.reduce((sum, entry) => sum + (entry.size || 0), 0);
 
     return {
       entries,
       count: entries.length,
       totalSize,
-      truncated: false,
+      truncated: wasTruncated,
     };
   }
 
@@ -134,7 +133,7 @@ export class DirectoryListTool {
    * @param currentDepth - Current recursion depth
    * @param maxDepth - Maximum recursion depth
    * @param entries - Array to collect entries
-   * @param totalSize - Running total of file sizes
+   * @returns Whether traversal was truncated by depth or max entries limits
    */
   private async listDirectory(
     basePath: string,
@@ -143,17 +142,18 @@ export class DirectoryListTool {
     showHidden: boolean,
     currentDepth: number,
     maxDepth: number,
-    entries: DirectoryEntry[],
-    totalSize: number
-  ): Promise<void> {
+    entries: DirectoryEntry[]
+  ): Promise<boolean> {
+    let truncated = false;
+
     // Check max depth
     if (currentDepth >= maxDepth) {
-      return;
+      return true;
     }
 
     // Check max entries
     if (entries.length >= this.maxEntries) {
-      return;
+      return true;
     }
 
     try {
@@ -162,6 +162,7 @@ export class DirectoryListTool {
       for (const dirent of dirents) {
         // Check max entries again
         if (entries.length >= this.maxEntries) {
+          truncated = true;
           break;
         }
 
@@ -192,16 +193,16 @@ export class DirectoryListTool {
 
           // Recursively list subdirectories
           if (recursive && dirent.isDirectory() && !isHidden) {
-            await this.listDirectory(
+            const childTruncated = await this.listDirectory(
               basePath,
               fullPath,
               recursive,
               showHidden,
               currentDepth + 1,
               maxDepth,
-              entries,
-              totalSize
+              entries
             );
+            truncated = truncated || childTruncated;
           }
         } catch (error: any) {
           // Skip entries that can't be accessed
@@ -216,6 +217,8 @@ export class DirectoryListTool {
       }
       throw error;
     }
+
+    return truncated;
   }
 
   /**
