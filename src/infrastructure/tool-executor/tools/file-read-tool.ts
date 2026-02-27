@@ -53,6 +53,10 @@ export interface FileReadToolResult {
 export class FileReadTool {
   private maxFileSize: number;
 
+  private countLines(content: string): number {
+    return content.length === 0 ? 0 : content.split('\n').length;
+  }
+
   constructor(maxFileSize: number = 10 * 1024 * 1024) { // 10MB default
     this.maxFileSize = maxFileSize;
   }
@@ -85,7 +89,7 @@ export class FileReadTool {
     try {
       // Read the file
       const content = await readFile(resolvedPath, { encoding });
-      const lines = content.split('\n');
+      const lines = content.length === 0 ? [] : content.split('\n');
 
       // Check file size
       const fileSize = Buffer.byteLength(content, encoding);
@@ -109,15 +113,17 @@ export class FileReadTool {
 
         const selectedLines = lines.slice(startIndex, endIndex);
         resultContent = selectedLines.join('\n');
-        actualRange = { start: startIndex + 1, end: endIndex };
+        actualRange = selectedLines.length === 0
+          ? { start: 0, end: 0 }
+          : { start: startIndex + 1, end: endIndex };
       } else {
         resultContent = content;
-        actualRange = { start: 1, end: lines.length };
+        actualRange = lines.length === 0 ? { start: 0, end: 0 } : { start: 1, end: lines.length };
       }
 
       return {
         content: resultContent,
-        lines: resultContent.split('\n').length,
+        lines: this.countLines(resultContent),
         size: Buffer.byteLength(resultContent, encoding),
         truncated: false,
         range: actualRange,

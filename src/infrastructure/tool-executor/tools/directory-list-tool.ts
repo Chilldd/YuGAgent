@@ -192,7 +192,7 @@ export class DirectoryListTool {
           entries.push(entry);
 
           // Recursively list subdirectories
-          if (recursive && dirent.isDirectory() && !isHidden) {
+          if (recursive && dirent.isDirectory()) {
             const childTruncated = await this.listDirectory(
               basePath,
               fullPath,

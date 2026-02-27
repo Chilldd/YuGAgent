@@ -32,4 +32,18 @@ describe('DirectoryListTool', () => {
     expect(result.truncated).toBe(true);
     expect(result.count).toBe(1);
   });
+
+  it('recursively includes files under hidden directories when showHidden is enabled', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dir-list-hidden-'));
+    const hiddenDir = join(root, '.hidden');
+
+    await mkdir(hiddenDir, { recursive: true });
+    await writeFile(join(hiddenDir, 'inside.txt'), 'secret');
+
+    const tool = new DirectoryListTool(100, 10);
+    const result = await tool.execute({ path: root, recursive: true, showHidden: true });
+
+    expect(result.entries.some((entry) => entry.path.endsWith('/.hidden'))).toBe(true);
+    expect(result.entries.some((entry) => entry.path.endsWith('/.hidden/inside.txt'))).toBe(true);
+  });
 });
