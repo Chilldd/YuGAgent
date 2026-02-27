@@ -28,6 +28,16 @@ program
   .description('启动交互式聊天界面')
   .action(async () => {
     try {
+      // 检查是否在 TTY 环境中运行
+      if (!process.stdin.isTTY) {
+        console.error('错误: 聊天命令需要在交互式终端中运行。');
+        console.error('\n请确保：');
+        console.error('  1. 在真实的终端（如 cmd.exe, PowerShell, Windows Terminal）中运行');
+        console.error('  2. 不要在 IDE 内置终端或非交互式环境中运行');
+        console.error('\n如果在 Windows 上使用 Git Bash，请尝试使用 cmd.exe 或 PowerShell。');
+        process.exit(1);
+      }
+
       // Create application container
       const { aiService } = createApp();
 
@@ -97,7 +107,11 @@ program
       }
 
       // Shutdown
-      shutdownApp({ chatController } as any);
+      try {
+        chatController.shutdown();
+      } catch (e) {
+        // Ignore cleanup errors
+      }
     } catch (error) {
       if (error instanceof Error) {
         console.error(`Error: ${error.message}`);
@@ -134,7 +148,12 @@ program
       console.log(`  Status: ${status.status}`);
       console.log(`  Session ID: ${status.sessionId || 'N/A'}`);
 
-      shutdownApp({ modelProvider, aiService } as any);
+      // Shutdown
+      try {
+        aiService.shutdown();
+      } catch (e) {
+        // Ignore cleanup errors
+      }
     } catch (error) {
       if (error instanceof Error) {
         console.error(`Error: ${error.message}`);

@@ -5,6 +5,8 @@
 
 import { createOpenAI } from '@ai-sdk/openai';
 import { generateText, streamText } from 'ai';
+import type { LanguageModelV1 } from '@ai-sdk/provider';
+import { z } from 'zod';
 import type { ChatMessage } from '../../../domain/agent/types.js';
 import { TokenCounter } from '../../../domain/memory/token-counter.js';
 import type {
@@ -37,11 +39,22 @@ export class ZhipuModelProvider implements IModelProvider {
     this.tokenCounter = new TokenCounter();
 
     // Create OpenAI-compatible client for Zhipu AI
+    // 使用 strict 兼容模式以正确处理智谱 AI 的响应格式
     this.client = createOpenAI({
       baseURL: config.baseURL,
       apiKey: config.apiKey,
-      compatibility: 'compatible', // Zhipu is OpenAI-compatible
+      compatibility: 'strict',
     });
+  }
+
+  /**
+   * Get a language model instance for the given model name
+   * @param modelName - Model name (defaults to glm-4.7)
+   * @returns Language model instance
+   */
+  private getModel(modelName?: string): LanguageModelV1 {
+    const model = this.client.chat(modelName || this.config.model || 'glm-4.7');
+    return model as LanguageModelV1;
   }
 
   /**
@@ -61,20 +74,33 @@ export class ZhipuModelProvider implements IModelProvider {
       // Convert domain messages to AI SDK format
       const messages = this.convertMessagesToAISDK(request.messages);
 
+      // Get the model from the provider
+      const model = this.getModel(request.model);
+
       // Build generation parameters
-      const generationParams = {
-        model: this.client(request.model || this.config.model || 'glm-4.7'),
+      const generationParams: any = {
+        model,
         messages,
         temperature: request.temperature ?? 0.7,
         maxTokens: request.maxTokens ?? 4096,
-        topP: request.topP,
-        stop: request.stopSequences,
-        // @ts-ignore - tools support
-        tools: request.tools ? this.convertToolsToAISDK(request.tools) : undefined,
-        // @ts-ignore - toolChoice support
-        toolChoice: request.toolChoice,
-        headers: request.headers,
       };
+
+      // 只添加有值的可选参数
+      if (request.topP !== undefined) {
+        generationParams.topP = request.topP;
+      }
+      if (request.stopSequences) {
+        generationParams.stop = request.stopSequences;
+      }
+      if (request.tools) {
+        generationParams.tools = this.convertToolsToAISDK(request.tools);
+      }
+      if (request.toolChoice) {
+        generationParams.toolChoice = request.toolChoice;
+      }
+      if (request.headers) {
+        generationParams.headers = request.headers;
+      }
 
       // Generate text using AI SDK
       const result = await generateText(generationParams);
@@ -120,20 +146,33 @@ export class ZhipuModelProvider implements IModelProvider {
       // Convert domain messages to AI SDK format
       const messages = this.convertMessagesToAISDK(request.messages);
 
+      // Get the model from the provider
+      const model = this.getModel(request.model);
+
       // Build generation parameters
-      const generationParams = {
-        model: this.client(request.model || this.config.model || 'glm-4.7'),
+      const generationParams: any = {
+        model,
         messages,
         temperature: request.temperature ?? 0.7,
         maxTokens: request.maxTokens ?? 4096,
-        topP: request.topP,
-        stop: request.stopSequences,
-        // @ts-ignore - tools support
-        tools: request.tools ? this.convertToolsToAISDK(request.tools) : undefined,
-        // @ts-ignore - toolChoice support
-        toolChoice: request.toolChoice,
-        headers: request.headers,
       };
+
+      // 只添加有值的可选参数
+      if (request.topP !== undefined) {
+        generationParams.topP = request.topP;
+      }
+      if (request.stopSequences) {
+        generationParams.stop = request.stopSequences;
+      }
+      if (request.tools) {
+        generationParams.tools = this.convertToolsToAISDK(request.tools);
+      }
+      if (request.toolChoice) {
+        generationParams.toolChoice = request.toolChoice;
+      }
+      if (request.headers) {
+        generationParams.headers = request.headers;
+      }
 
       // Stream text using AI SDK
       const result = await streamText(generationParams);
@@ -305,7 +344,7 @@ export class ZhipuModelProvider implements IModelProvider {
     type: string;
     name: string;
     description: string;
-    parameters: Record<string, unknown>;
+    parameters: z.ZodType<any, any>;
   }> {
     if (!tools) {
       return [];
@@ -315,8 +354,55 @@ export class ZhipuModelProvider implements IModelProvider {
       type: 'function',
       name: tool.name,
       description: tool.description,
-      parameters: tool.parameters ?? {},
+      // 将参数 schema 转换为 Zod schema
+      parameters: this.convertParametersToZod(tool.parameters ?? {}),
     }));
+  }
+
+  /**
+   * Convert parameters object to Zod schema
+   * @param parameters - Parameters object (may be JSON Schema or plain object)
+   * @returns Zod schema
+   */
+  private convertParametersToZod(parameters: Record<string, unknown>): z.ZodType<any, any> {
+    // 如果已经是 Zod schema，直接返回
+    if (parameters && typeof parameters === 'object' && 'safeParse' in parameters && typeof parameters.safeParse === 'function') {
+      return parameters as z.ZodType<any, any>;
+    }
+
+    // 否则创建一个基本的 Zod object schema
+    // 这是一个简化的实现，实际应该根据 JSON Schema 创建对应的 Zod schema
+    try {
+      // 尝试从 JSON Schema 创建 Zod schema
+      const schema: Record<string, z.ZodTypeAny> = {};
+
+      if (parameters.properties && typeof parameters.properties === 'object') {
+        for (const [key, value] of Object.entries(parameters.properties as Record<string, any>)) {
+          const propSchema = (value as any).type || 'string';
+          switch (propSchema) {
+            case 'string':
+              schema[key] = z.string();
+              break;
+            case 'number':
+              schema[key] = z.number();
+              break;
+            case 'boolean':
+              schema[key] = z.boolean();
+              break;
+            case 'array':
+              schema[key] = z.array(z.any());
+              break;
+            default:
+              schema[key] = z.any();
+          }
+        }
+      }
+
+      return z.object(schema);
+    } catch {
+      // 如果转换失败，返回一个接受任何值的 schema
+      return z.object({}).passthrough();
+    }
   }
 
   /**

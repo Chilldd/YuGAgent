@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Box, render, StdinContext } from 'ink';
+import { Box, Text, render, StdinContext } from 'ink';
 import type { Stdin } from 'ink';
 
 import { ChatPanel, WelcomeMessage, EmptyState } from './components/ChatPanel.js';

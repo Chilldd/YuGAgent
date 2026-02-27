@@ -49,10 +49,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     }
   }, [isStreaming, streamingContent]);
 
+  // Filter out system messages - they should not be displayed to users
+  const visibleMessages = messages.filter(msg => msg.role !== MessageRole.SYSTEM);
+
   return (
     <Box flexDirection="column" width={maxWidth}>
       {/* Message history using Static for non-scrolling content */}
-      <Static items={messages}>
+      <Static items={visibleMessages}>
         {(message, index) => (
           <ChatMessageItem
             key={message.metadata?.id || index}
