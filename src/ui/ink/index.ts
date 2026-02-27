@@ -24,5 +24,6 @@ export { default as InputBox, MultilineInput } from './components/InputBox.js';
 export type { InputBoxProps, MultilineInputProps } from './components/InputBox.js';
 
 // App export
-export { App, startTUI } from './App.js';
+export { startTUI } from './App.js';
+export { default as App } from './App.js';
 export type { AppProps } from './App.js';
