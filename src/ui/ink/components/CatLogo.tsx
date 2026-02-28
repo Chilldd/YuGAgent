@@ -52,7 +52,7 @@ export const CatLogo: React.FC<CatLogoProps> = ({ maxWidth = 80 }) => {
         </Text>
       </Box>
       <Box>
-        <Text color="#00F5FF">
+        <Text color={colors.cyberCyan}>
                   {'\u2571'}{'\u2572'}{'\u2571'}{'\u2572'}{'\u2571'}{'\u2572'}{'\u2571'}{'\u2572'}{'\u2571'}{'\u2572'}{'\u2571'}{'\u2572'}{'\u2571'}{'\u2572'}{'\u2571'}{'\u2572'}{'\u2571'}{'\u2572'}
         </Text>
       </Box>
@@ -60,56 +60,56 @@ export const CatLogo: React.FC<CatLogoProps> = ({ maxWidth = 80 }) => {
       {/* YuGAgent 文字 - 大号字体 */}
       <Box marginTop={1}>
         <Box>
-          <Text bold color="#FF006E">                      </Text>
-          <Text bold color="#FF006E">██╗    ██╗</Text>
-          <Text bold color="#FF006E">                            </Text>
+          <Text bold color={colors.cyberPink}>                      </Text>
+          <Text bold color={colors.cyberPink}>██╗    ██╗</Text>
+          <Text bold color={colors.cyberPink}>                            </Text>
         </Box>
         <Box>
-          <Text bold color="#FF006E">                      </Text>
-          <Text bold color="#FF006E">██║    ██║</Text>
-          <Text bold color="#FF006E">                            </Text>
+          <Text bold color={colors.cyberPink}>                      </Text>
+          <Text bold color={colors.cyberPink}>██║    ██║</Text>
+          <Text bold color={colors.cyberPink}>                            </Text>
         </Box>
         <Box>
-          <Text bold color="#FF006E">                      </Text>
-          <Text bold color="#FF006E">██║ █╗ ██║</Text>
-          <Text bold color="#FF006E">                            </Text>
+          <Text bold color={colors.cyberPink}>                      </Text>
+          <Text bold color={colors.cyberPink}>██║ █╗ ██║</Text>
+          <Text bold color={colors.cyberPink}>                            </Text>
         </Box>
         <Box>
-          <Text bold color="#FF006E">                      </Text>
-          <Text bold color="#FF006E">██║███╗██║</Text>
-          <Text bold color="#FF006E">                            </Text>
+          <Text bold color={colors.cyberPink}>                      </Text>
+          <Text bold color={colors.cyberPink}>██║███╗██║</Text>
+          <Text bold color={colors.cyberPink}>                            </Text>
         </Box>
         <Box>
-          <Text bold color="#FF006E">                      </Text>
-          <Text bold color="#FF006E">╚███╔███╔╝</Text>
-          <Text bold color="#FF006E">                            </Text>
+          <Text bold color={colors.cyberPink}>                      </Text>
+          <Text bold color={colors.cyberPink}>╚███╔███╔╝</Text>
+          <Text bold color={colors.cyberPink}>                            </Text>
         </Box>
         <Box>
-          <Text bold color="#FF006E">                      </Text>
-          <Text bold color="#FF006E"> ╚══╝╚══╝</Text>
-          <Text bold color="#FF006E">                             </Text>
+          <Text bold color={colors.cyberPink}>                      </Text>
+          <Text bold color={colors.cyberPink}> ╚══╝╚══╝</Text>
+          <Text bold color={colors.cyberPink}>                             </Text>
         </Box>
       </Box>
 
       {/* 装饰线 */}
       <Box marginTop={1}>
-        <Text color="#FFBE0B">
+        <Text color={colors.cyberYellow}>
                   ══════════════════
         </Text>
       </Box>
 
       {/* YuGAgent 文字 - 渐变色 */}
       <Box justifyContent="center">
-        <Text bold color="#FFBE0B">                    </Text>
-        <Text bold color="#FF006E">═</Text>
-        <Text bold color="#00F5FF">═ YuGAgent </Text>
-        <Text bold color="#FF006E">═</Text>
-        <Text bold color="#FFBE0B">                         </Text>
+        <Text bold color={colors.cyberYellow}>                    </Text>
+        <Text bold color={colors.cyberPink}>═</Text>
+        <Text bold color={colors.cyberCyan}>═ YuGAgent </Text>
+        <Text bold color={colors.cyberPink}>═</Text>
+        <Text bold color={colors.cyberYellow}>                         </Text>
       </Box>
 
       {/* 装饰线 */}
       <Box>
-        <Text color="#FFBE0B">
+        <Text color={colors.cyberYellow}>
                   ══════════════════
         </Text>
       </Box>

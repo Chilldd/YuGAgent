@@ -175,7 +175,7 @@ export const WelcomeMessage: React.FC<WelcomeMessageProps> = ({
       marginBottom={1}
       width={maxWidth}
       borderStyle="double"
-      borderColor="#FF006E"
+      borderColor={colors.cyberPink}
       paddingX={1}
     >
       {/* Logo 区域 */}

@@ -65,6 +65,11 @@ export const colors = {
   text: '#f9fafb', // Gray-50
   textDim: '#d1d5db', // Gray-300
   textMuted: '#9ca3af', // Gray-400
+
+  // Cyberpunk colors - 赛博朋克配色
+  cyberPink: '#FF006E', // 赛博粉 - 主要强调色
+  cyberCyan: '#00F5FF', // 赛博青 - 次要强调色
+  cyberYellow: '#FFBE0B', // 赛博黄 - 警告/装饰色
 } as const;
 
 /**
