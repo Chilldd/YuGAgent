@@ -54,6 +54,49 @@ export interface FileReadToolResult {
 export class FileReadTool {
   private maxFileSize: number;
 
+  /**
+   * 检查文本是否包含乱码替换字符
+   * @param text - 文本内容
+   * @returns 是否包含替换字符
+   */
+  private hasReplacementCharacter(text: string): boolean {
+    return text.includes('�');
+  }
+
+  /**
+   * 使用自动回退策略解码文件内容
+   * @param buffer - 文件原始字节
+   * @param encoding - 用户指定编码
+   * @returns 解码后的文本
+   */
+  private decodeContent(buffer: Buffer, encoding: BufferEncoding): string {
+    // step1. 非 UTF-8 编码遵循用户参数直接解码
+    if (encoding !== 'utf8') {
+      return buffer.toString(encoding);
+    }
+
+    // step2. 先按 UTF-8 解码
+    const utf8Content = buffer.toString('utf8');
+    if (!this.hasReplacementCharacter(utf8Content)) {
+      return utf8Content;
+    }
+
+    // step3. UTF-8 出现乱码时，尝试 GBK 回退（兼容 Windows 常见编码）
+    try {
+      const gbkContent = new TextDecoder('gbk').decode(buffer);
+      const utf8ReplacementCount = (utf8Content.match(/�/g) || []).length;
+      const gbkReplacementCount = (gbkContent.match(/�/g) || []).length;
+
+      if (gbkReplacementCount < utf8ReplacementCount) {
+        return gbkContent;
+      }
+    } catch {
+      // 忽略回退失败，保留 UTF-8
+    }
+
+    return utf8Content;
+  }
+
   private countLines(content: string): number {
     return content.length === 0 ? 0 : content.split('\n').length;
   }
@@ -85,11 +128,12 @@ export class FileReadTool {
 
     try {
       // step3. 读取文件内容
-      const content = await readFile(resolvedPath, { encoding });
+      const fileBuffer = await readFile(resolvedPath);
+      const content = this.decodeContent(fileBuffer, encoding);
       const lines = content.length === 0 ? [] : content.split('\n');
 
       // step4. 检查文件大小（在读取后验证，避免过大的内容占用内存）
-      const fileSize = Buffer.byteLength(content, encoding);
+      const fileSize = fileBuffer.byteLength;
       if (fileSize > this.maxFileSize) {
         console.warn(`[FileReadTool] File too large: ${fileSize} bytes exceeds maximum of ${this.maxFileSize} bytes`);
         throw new Error(
@@ -122,7 +166,7 @@ export class FileReadTool {
       return {
         content: resultContent,
         lines: this.countLines(resultContent),
-        size: Buffer.byteLength(resultContent, encoding),
+        size: Buffer.byteLength(resultContent, 'utf8'),
         truncated: false,
         range: actualRange,
       };

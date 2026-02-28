@@ -449,7 +449,16 @@ export class AgentOrchestrator extends EventEmitter {
         logger.debug('自动生成工具调用说明文本', { text: currentText });
       }
 
-      // step8. 触发 after receive hook
+      // step8. 对空响应生成兜底总结，避免 UI 显示空白
+      if (currentToolCalls.length === 0 && currentText.trim().length === 0) {
+        currentText = this.buildFallbackSummary(allToolResults);
+        logger.warn('模型返回空响应，已生成兜底任务总结', {
+          summaryLength: currentText.length,
+          toolResultsCount: allToolResults.length,
+        });
+      }
+
+      // step9. 触发 after receive hook
       await this.hooksManager.emit('afterReceive' as any, {
         sessionId: this.sessionId,
         messages,
@@ -464,7 +473,7 @@ export class AgentOrchestrator extends EventEmitter {
         },
       });
 
-      // step9. 添加助手响应到上下文
+      // step10. 添加助手响应到上下文
       const assistantMessage: ChatMessage = {
         role: MessageRole.ASSISTANT,
         content: currentText,
@@ -479,7 +488,7 @@ export class AgentOrchestrator extends EventEmitter {
 
       this.contextManager.addMessage(assistantMessage);
 
-      // step9.1 触发消息更新事件，让 UI 立即显示助手消息
+      // step10.1 触发消息更新事件，让 UI 立即显示助手消息
       await this.hooksManager.emit('messagesUpdate' as any, {
         sessionId: this.sessionId,
         messages: this.contextManager.getMessages(),
@@ -490,7 +499,7 @@ export class AgentOrchestrator extends EventEmitter {
         },
       });
 
-      // step10. 检查是否有工具调用
+      // step11. 检查是否有工具调用
       if (currentToolCalls.length > 0) {
         logger.info(`检测到工具调用`, {
           toolNames: currentToolCalls.map(tc => tc.name),
@@ -501,11 +510,11 @@ export class AgentOrchestrator extends EventEmitter {
 
         allToolCalls.push(...currentToolCalls);
 
-        // step11. 执行工具调用
+        // step12. 执行工具调用
         const toolResults = await this.executeToolCalls(currentToolCalls);
         allToolResults.push(...toolResults);
 
-        // step12. 添加工具结果到上下文
+        // step13. 添加工具结果到上下文
         for (const result of toolResults) {
           const toolMessage: ChatMessage = {
             role: MessageRole.TOOL,
@@ -523,7 +532,7 @@ export class AgentOrchestrator extends EventEmitter {
           this.contextManager.addMessage(toolMessage);
         }
 
-        // step12.1 触发消息更新事件，让 UI 立即显示当前的消息状态
+        // step13.1 触发消息更新事件，让 UI 立即显示当前的消息状态
         await this.hooksManager.emit('messagesUpdate' as any, {
           sessionId: this.sessionId,
           messages: this.contextManager.getMessages(),
@@ -534,17 +543,17 @@ export class AgentOrchestrator extends EventEmitter {
           },
         });
 
-        // step13. 继续循环
+        // step14. 继续循环
         logger.info('工具执行完成，继续思考循环');
         continue;
       }
 
-      // step14. 无工具调用 - 这是最终响应
+      // step15. 无工具调用 - 这是最终响应
       finalResponse = currentText;
       break;
     }
 
-    // step15. 检查是否达到最大迭代次数
+    // step16. 检查是否达到最大迭代次数
     if (iteration >= this.maxThoughtIterations && !finalResponse) {
       finalResponse = 'I reached the maximum number of thinking iterations. Please provide more context or simplify your request.';
     }
@@ -725,6 +734,36 @@ export class AgentOrchestrator extends EventEmitter {
 
     return results;
   }
+
+  /**
+   * 构建模型空响应时的兜底任务总结
+   * @param toolResults - 本轮累计工具结果
+   * @returns 可展示给用户的总结文本
+   */
+  private buildFallbackSummary(toolResults: ToolResult[]): string {
+    // step1. 无工具结果时返回通用提示
+    if (toolResults.length === 0) {
+      return '任务已执行完成，但模型未返回可显示内容。';
+    }
+
+    // step2. 优先使用最后一个成功工具的输出摘要
+    const lastSuccessResult = [...toolResults].reverse().find(result => result.success && result.output);
+    if (lastSuccessResult?.output) {
+      return `任务执行完成。最后一次工具输出：\n${lastSuccessResult.output}`;
+    }
+
+    // step3. 若没有成功输出，返回错误聚合信息
+    const errors = toolResults
+      .filter(result => !result.success)
+      .map(result => `- ${result.toolName}: ${result.error || '未知错误'}`);
+
+    if (errors.length > 0) {
+      return `任务执行完成，但工具调用存在错误：\n${errors.join('\n')}`;
+    }
+
+    return '任务已执行完成。';
+  }
+
 
   /**
    * Build the system prompt with security rules
