@@ -51,8 +51,25 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     }
   }, [isStreaming, streamingContent]);
 
-  // Filter out system messages - they should not be displayed to users
-  const visibleMessages = messages.filter(msg => msg.role !== MessageRole.SYSTEM);
+  // Filter out system messages and tool-call placeholder assistant messages
+  const visibleMessages = messages.filter(msg => {
+    // step1. 系统消息不展示给用户
+    if (msg.role === MessageRole.SYSTEM) {
+      return false;
+    }
+
+    // step2. 仅包含 toolCalls 且无自然语言内容的 assistant 消息属于协议中间态，不展示
+    if (
+      msg.role === MessageRole.ASSISTANT
+      && msg.toolCalls
+      && msg.toolCalls.length > 0
+      && msg.content.trim().length === 0
+    ) {
+      return false;
+    }
+
+    return true;
+  });
 
   return (
     <Box flexDirection="column" width={maxWidth}>
