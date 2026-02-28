@@ -226,7 +226,7 @@ const App: React.FC<AppProps> = ({
     };
   }, [aiService]);
 
-  // step2. 监听终端大小变化，使用 debounce 并强制重新挂载组件防止内容重复
+  // step2. 监听终端大小变化，使用 debounce 更新布局宽度
   useEffect(() => {
     let resizeTimeout: NodeJS.Timeout | null = null;
 
@@ -239,10 +239,6 @@ const App: React.FC<AppProps> = ({
       // 延迟 100ms 执行，等待窗口调整完成
       resizeTimeout = setTimeout(() => {
         if (isMountedRef.current) {
-          // step1. 清除终端屏幕，防止旧内容残留
-          // 使用 ANSI 转义序列清除整个屏幕
-          process.stdout.write('\x1b[2J\x1b[H');
-
           const newMaxWidth = calculateMaxWidth();
           setState(prev => {
             // 只有当宽度真正变化时才更新状态
@@ -339,16 +335,13 @@ const App: React.FC<AppProps> = ({
   }, [aiService, state.isStreaming]);
 
   // Get terminal height for chat panel
-  const chatHeight = process.stdout.rows ? Math.max(10, process.stdout.rows - 8) : 20;
-
   return (
-    <Box flexDirection="column" paddingX={1} key={`main-${state.maxWidth}`}>
+    <Box flexDirection="column" paddingX={1}>
       {/* Main content area */}
       <Box flexDirection="column" marginBottom={1} flexGrow={1}>
         {/* Welcome message or chat panel */}
         {state.showWelcome ? (
           <WelcomeMessage
-            key={`welcome-${state.maxWidth}`}
             appName={appName}
             version={version}
             model={state.model}
@@ -356,10 +349,9 @@ const App: React.FC<AppProps> = ({
             maxWidth={state.maxWidth - 2}
           />
         ) : state.messages.length === 0 ? (
-          <EmptyState key={`empty-${state.maxWidth}`} maxWidth={state.maxWidth - 2} />
+          <EmptyState maxWidth={state.maxWidth - 2} />
         ) : (
           <ChatPanel
-            key={`chat-${state.maxWidth}`}
             messages={state.messages}
             streamingContent={state.streamingContent}
             isStreaming={state.isStreaming}
