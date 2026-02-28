@@ -9,7 +9,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { IModelProvider } from '../../infrastructure/model-provider/interface.js';
 import type { IContextManager } from '../context/interface.js';
 import type { IMemoryManager } from '../memory/interface.js';
-import type { IHooksManager } from '../hooks/interface.js';
+import { HookEvent, type IHooksManager } from '../hooks/interface.js';
 import type { IToolExecutor } from '../../infrastructure/tool-executor/interface.js';
 import type {
   ChatMessage,
@@ -148,6 +148,32 @@ export class AgentOrchestrator extends EventEmitter {
 
     // Initialize context with system prompt
     this.initializeContext();
+
+    // 初始化 Hook 事件桥接（HooksManager -> EventEmitter）
+    this.setupHookEventBridge();
+
+  }
+
+  /**
+   * 建立 Hook 事件桥接，将 HooksManager 生命周期事件转发到 Orchestrator EventEmitter。
+   *
+   * 目的：上层 AIService/UI 通过 orchestrator.on(...) 监听时，能够拿到实时事件。
+   */
+  private setupHookEventBridge(): void {
+    // step1. 遍历所有 HookEvent，逐一注册桥接处理器
+    for (const event of Object.values(HookEvent)) {
+      this.hooksManager.on(event, (context) => {
+        // step2. 转发事件到 Orchestrator 自身的 EventEmitter
+        this.emit(event, context);
+
+        // step3. 记录关键调试日志，便于排查 UI 实时刷新问题
+        logger.debug('Hook 事件已桥接转发', {
+          event,
+          sessionId: context.sessionId,
+          messageCount: context.messages.length,
+        });
+      });
+    }
   }
 
   /**
