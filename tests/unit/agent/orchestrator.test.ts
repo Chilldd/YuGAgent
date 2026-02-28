@@ -498,6 +498,52 @@ describe('AgentOrchestrator', () => {
       expect(assistantMessages[assistantMessages.length - 1]?.content).toContain('任务执行完成');
     });
 
+    it('should generate fallback summary when model returns empty final response', async () => {
+      const toolCall: ToolCall = {
+        id: 'tool-123',
+        name: 'bash',
+        arguments: '{"command": "echo test"}',
+      };
+
+      mockToolExecutor.setMockResult({
+        success: true,
+        data: { stdout: '今天是个好日子！' },
+      });
+
+      // step1. 第一次触发工具调用，第二次返回空文本
+      mockModelProvider.setStreamResponses([
+        {
+          text: '',
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'tool_calls',
+          toolCalls: [toolCall],
+        },
+        {
+          text: '',
+          usage: { promptTokens: 20, completionTokens: 10, totalTokens: 30 },
+          finishReason: 'stop',
+        },
+      ]);
+
+      const orchestrator = new AgentOrchestrator(
+        mockModelProvider,
+        mockContextManager,
+        mockMemoryManager,
+        mockHooksManager,
+        mockToolExecutor,
+        { config, allowedTools: ['bash'] }
+      );
+
+      const result = await orchestrator.processUserInput('执行命令并总结');
+
+      expect(result.success).toBe(true);
+      expect(result.response).toContain('任务执行完成');
+      expect(result.response).toContain('stdout');
+
+      const assistantMessages = mockContextManager.getMessages().filter(m => m.role === 'assistant');
+      expect(assistantMessages[assistantMessages.length - 1]?.content).toContain('任务执行完成');
+    });
+
     it('should accumulate token usage across iterations', async () => {
       const orchestrator = new AgentOrchestrator(
         mockModelProvider,
