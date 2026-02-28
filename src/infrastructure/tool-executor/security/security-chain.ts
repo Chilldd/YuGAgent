@@ -128,11 +128,15 @@ export class SecurityChain {
       return severityOrder[a.severity] - severityOrder[b.severity];
     });
 
+    // step1. 记录安全检查开始（在调试模式下）
+    // step2. 生产环境应使用日志系统而非 console
     // Check each rule in order
     for (const rule of sortedRules) {
       try {
         const result = await rule.validate(request);
         if (!result.passed) {
+          // 记录安全规则失败
+          console.warn(`[SecurityChain] Rule '${rule.id}' (${rule.severity}) blocked request: ${result.error}`);
           return {
             passed: false,
             error: result.error || `Security rule '${rule.id}' validation failed`,
@@ -141,9 +145,11 @@ export class SecurityChain {
         }
       } catch (error) {
         // If a rule throws an error, consider it a failure
+        const errorMessage = `Security rule '${rule.id}' threw an error: ${error instanceof Error ? error.message : String(error)}`;
+        console.error(`[SecurityChain] ${errorMessage}`);
         return {
           passed: false,
-          error: `Security rule '${rule.id}' threw an error: ${error instanceof Error ? error.message : String(error)}`,
+          error: errorMessage,
           rule,
         };
       }

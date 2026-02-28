@@ -59,13 +59,13 @@ export function getZhipuConfig(): ZhipuConfig {
 
   const config: ZhipuConfig = {
     apiKey,
-    baseURL: process.env[ENV_VARS.BASE_URL] ?? DEFAULT_ZHIPU_CONFIG.baseURL,
-    model: process.env[ENV_VARS.MODEL] ?? DEFAULT_ZHIPU_CONFIG.model,
+    baseURL: (process.env[ENV_VARS.BASE_URL] as string | undefined) ?? DEFAULT_ZHIPU_CONFIG.baseURL,
+    model: (process.env[ENV_VARS.MODEL] as string | undefined) ?? DEFAULT_ZHIPU_CONFIG.model,
     timeout: process.env[ENV_VARS.TIMEOUT]
-      ? Number.parseInt(process.env[ENV_VARS.TIMEOUT], 10)
+      ? Number.parseInt(process.env[ENV_VARS.TIMEOUT] as string, 10)
       : DEFAULT_ZHIPU_CONFIG.timeout,
     maxRetries: process.env[ENV_VARS.MAX_RETRIES]
-      ? Number.parseInt(process.env[ENV_VARS.MAX_RETRIES], 10)
+      ? Number.parseInt(process.env[ENV_VARS.MAX_RETRIES] as string, 10)
       : DEFAULT_ZHIPU_CONFIG.maxRetries,
   };
 

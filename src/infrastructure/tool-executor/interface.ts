@@ -4,9 +4,9 @@
  */
 
 /**
- * Tool definition metadata
+ * Tool execution definition metadata
  */
-export interface ToolDefinition {
+export interface ToolExecutionDefinition {
   /** Unique identifier for the tool */
   name: string;
 
@@ -78,7 +78,7 @@ export interface ToolExecuteResponse {
   result: ToolExecuteResult;
 
   /** The tool that was executed */
-  tool: ToolDefinition;
+  tool: ToolExecutionDefinition;
 
   /** Timestamp of execution */
   timestamp: string;
@@ -130,7 +130,7 @@ export interface IToolExecutor {
    * @param tool - The tool definition
    * @param handler - Function to handle tool execution
    */
-  registerTool(tool: ToolDefinition, handler: (params: any, context?: any) => Promise<any>): void;
+  registerTool(tool: ToolExecutionDefinition, handler: (params: any, context?: any) => Promise<any>): void;
 
   /**
    * Unregister a tool
@@ -142,14 +142,14 @@ export interface IToolExecutor {
    * Get all registered tools
    * @returns Map of tool name to tool definition
    */
-  getTools(): Map<string, ToolDefinition>;
+  getTools(): Map<string, ToolExecutionDefinition>;
 
   /**
    * Get a specific tool by name
    * @param toolName - Name of the tool
    * @returns The tool definition or undefined
    */
-  getTool(toolName: string): ToolDefinition | undefined;
+  getTool(toolName: string): ToolExecutionDefinition | undefined;
 
   /**
    * Execute a tool
@@ -175,4 +175,22 @@ export interface IToolExecutor {
    * @returns Array of security rules
    */
   getSecurityRules(): SecurityRule[];
+
+  /**
+   * Get the security chain
+   * @returns The security chain instance
+   */
+  getSecurityChain(): import('./security/index.js').SecurityChain;
+
+  /**
+   * List all available tools
+   * @returns Array of tool definitions
+   */
+  listTools(): ToolExecutionDefinition[];
+
+  /**
+   * Get tool names by category
+   * @returns Object with builtin and custom tool names
+   */
+  getToolNames(): { builtin: string[]; custom: string[] };
 }

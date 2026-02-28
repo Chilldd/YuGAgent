@@ -71,13 +71,16 @@ export class ZhipuModelProvider implements IModelProvider {
    */
   async complete(request: ModelCompleteRequest): Promise<ModelCompleteResponse> {
     try {
-      // Convert domain messages to AI SDK format
+      // step1. 验证请求参数
+      this.validateRequest(request);
+
+      // step2. 转换域消息到 AI SDK 格式
       const messages = this.convertMessagesToAISDK(request.messages);
 
-      // Get the model from the provider
+      // step3. 获取模型实例
       const model = this.getModel(request.model);
 
-      // Build generation parameters
+      // step4. 构建生成参数
       const generationParams: any = {
         model,
         messages,
@@ -102,10 +105,10 @@ export class ZhipuModelProvider implements IModelProvider {
         generationParams.headers = request.headers;
       }
 
-      // Generate text using AI SDK
+      // step5. 使用 AI SDK 生成文本
       const result = await generateText(generationParams);
 
-      // Build response
+      // step6. 构建响应
       const response: ModelCompleteResponse = {
         text: result.text,
         usage: {
@@ -115,10 +118,10 @@ export class ZhipuModelProvider implements IModelProvider {
         },
         finishReason: this.mapFinishReason(result.finishReason),
         model: request.model || this.config.model || 'glm-4.7',
-        id: result.id ?? undefined,
+        id: (result as any).id ?? undefined,
       };
 
-      // Add tool calls if present
+      // step7. 添加工具调用（如果有）
       if (result.toolCalls && result.toolCalls.length > 0) {
         response.toolCalls = result.toolCalls.map((tc) => ({
           id: tc.toolCallId,
@@ -129,10 +132,96 @@ export class ZhipuModelProvider implements IModelProvider {
 
       return response;
     } catch (error) {
+      // step8. 增强错误处理，添加更多上下文
       if (error instanceof Error) {
-        throw new Error(`Zhipu AI completion failed: ${error.message}`);
+        // 记录原始错误用于调试（生产环境中应该使用日志系统）
+        const enhancedError = new Error(`Zhipu AI completion failed: ${error.message}`);
+        (enhancedError as any).cause = error;
+        (enhancedError as any).requestContext = {
+          model: request.model,
+          messagesCount: request.messages.length,
+          hasTools: !!request.tools,
+        };
+        throw enhancedError;
       }
       throw new Error('Zhipu AI completion failed with unknown error');
+    }
+  }
+
+  /**
+   * 验证模型请求参数
+   * @param request - 要验证的请求
+   * @throws Error 如果请求无效
+   */
+  private validateRequest(request: ModelCompleteRequest): void {
+    // step1. 验证消息数组
+    if (!request.messages || !Array.isArray(request.messages)) {
+      throw new Error('Messages must be a non-empty array');
+    }
+
+    if (request.messages.length === 0) {
+      throw new Error('Messages array cannot be empty');
+    }
+
+    if (request.messages.length > 1000) {
+      throw new Error('Too many messages (max: 1000)');
+    }
+
+    // step2. 验证每个消息
+    for (let i = 0; i < request.messages.length; i++) {
+      const msg = request.messages[i];
+      if (!msg || typeof msg !== 'object') {
+        throw new Error(`Message at index ${i} is invalid`);
+      }
+      if (!msg.role || typeof msg.role !== 'string') {
+        throw new Error(`Message at index ${i} missing valid role`);
+      }
+      if (msg.content === undefined || typeof msg.content !== 'string') {
+        throw new Error(`Message at index ${i} missing valid content`);
+      }
+      if (msg.content.length > 100000) {
+        throw new Error(`Message at index ${i} exceeds maximum length`);
+      }
+    }
+
+    // step3. 验证温度参数
+    if (request.temperature !== undefined) {
+      if (typeof request.temperature !== 'number') {
+        throw new Error('Temperature must be a number');
+      }
+      if (request.temperature < 0 || request.temperature > 2) {
+        throw new Error('Temperature must be between 0 and 2');
+      }
+    }
+
+    // step4. 验证 maxTokens 参数
+    if (request.maxTokens !== undefined) {
+      if (typeof request.maxTokens !== 'number') {
+        throw new Error('maxTokens must be a number');
+      }
+      if (request.maxTokens < 1 || request.maxTokens > 128000) {
+        throw new Error('maxTokens must be between 1 and 128000');
+      }
+    }
+
+    // step5. 验证 topP 参数
+    if (request.topP !== undefined) {
+      if (typeof request.topP !== 'number') {
+        throw new Error('topP must be a number');
+      }
+      if (request.topP < 0 || request.topP > 1) {
+        throw new Error('topP must be between 0 and 1');
+      }
+    }
+
+    // step6. 验证工具参数
+    if (request.tools) {
+      if (!Array.isArray(request.tools)) {
+        throw new Error('Tools must be an array');
+      }
+      if (request.tools.length > 50) {
+        throw new Error('Too many tools (max: 50)');
+      }
     }
   }
 
@@ -143,10 +232,13 @@ export class ZhipuModelProvider implements IModelProvider {
    */
   async *stream(request: ModelCompleteRequest): AsyncGenerator<StreamChunk> {
     try {
-      // Convert domain messages to AI SDK format
+      // step1. 验证请求参数
+      this.validateRequest(request);
+
+      // step2. 转换域消息到 AI SDK 格式
       const messages = this.convertMessagesToAISDK(request.messages);
 
-      // Get the model from the provider
+      // step3. 获取模型实例
       const model = this.getModel(request.model);
 
       // Build generation parameters
@@ -193,14 +285,19 @@ export class ZhipuModelProvider implements IModelProvider {
       const finalResult = await result;
 
       // Collect tool calls if any
-      if (finalResult.toolCalls && finalResult.toolCalls.length > 0) {
-        for (const tc of finalResult.toolCalls) {
+      const toolCalls = (finalResult as any).toolCalls;
+      if (toolCalls && toolCalls.length > 0) {
+        for (const tc of toolCalls) {
           toolCallsAccumulator.set(tc.toolCallId, {
             name: tc.toolName,
             args: tc.args as string,
           });
         }
       }
+
+      // Get usage info
+      const usage = (finalResult as any).usage;
+      const finishReason = (finalResult as any).finishReason;
 
       // Yield final chunk with metadata
       yield {
@@ -215,15 +312,24 @@ export class ZhipuModelProvider implements IModelProvider {
               }))
             : undefined,
         usage: {
-          promptTokens: finalResult.usage?.promptTokens ?? 0,
-          completionTokens: finalResult.usage?.completionTokens ?? 0,
-          totalTokens: finalResult.usage?.totalTokens ?? 0,
+          promptTokens: usage?.promptTokens ?? 0,
+          completionTokens: usage?.completionTokens ?? 0,
+          totalTokens: usage?.totalTokens ?? 0,
         },
-        finishReason: this.mapFinishReason(finalResult.finishReason),
+        finishReason: this.mapFinishReason(finishReason),
       };
     } catch (error) {
+      // step5. 增强错误处理，添加更多上下文
       if (error instanceof Error) {
-        throw new Error(`Zhipu AI streaming failed: ${error.message}`);
+        // 记录原始错误用于调试（生产环境中应该使用日志系统）
+        const enhancedError = new Error(`Zhipu AI streaming failed: ${error.message}`);
+        (enhancedError as any).cause = error;
+        (enhancedError as any).requestContext = {
+          model: request.model,
+          messagesCount: request.messages.length,
+          hasTools: !!request.tools,
+        };
+        throw enhancedError;
       }
       throw new Error('Zhipu AI streaming failed with unknown error');
     }
@@ -262,7 +368,7 @@ export class ZhipuModelProvider implements IModelProvider {
       const testRequest: ModelCompleteRequest = {
         messages: [
           {
-            role: 'user',
+            role: 'user' as any,
             content: 'ping',
           },
         ],
@@ -367,7 +473,7 @@ export class ZhipuModelProvider implements IModelProvider {
   private convertParametersToZod(parameters: Record<string, unknown>): z.ZodType<any, any> {
     // 如果已经是 Zod schema，直接返回
     if (parameters && typeof parameters === 'object' && 'safeParse' in parameters && typeof parameters.safeParse === 'function') {
-      return parameters as z.ZodType<any, any>;
+      return parameters as unknown as z.ZodType<any, any>;
     }
 
     // 否则创建一个基本的 Zod object schema

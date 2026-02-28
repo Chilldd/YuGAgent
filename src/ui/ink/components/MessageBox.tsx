@@ -7,27 +7,10 @@ import React from 'react';
 import { Box, Text } from 'ink';
 import { MessageRole } from '../../../domain/agent/types.js';
 import { Markdown } from './Markdown.js';
-import { colors, themeStyles } from '../theme/colors.js';
+import { themeStyles, colors } from '../theme/colors.js';
 
-const theme: themeStyles = {
-  status: { idle: { color: '', label: '' }, processing: { color: '', label: '' }, error: { color: '', label: '' }, thinking: { color: '', label: '' } },
-  toolStatus: { pending: { color: '', label: '' }, running: { color: '', label: '' }, success: { color: '', label: '' }, error: { color: '', label: '' } },
-  messageBox: {
-    user: { border: colors.user, background: colors.gray[800], icon: 'You' },
-    assistant: { border: colors.assistant, background: colors.gray[800], icon: 'AI' },
-    system: { border: colors.system, background: colors.gray[800], icon: 'SYS' },
-    tool: { border: colors.tool, background: colors.gray[800], icon: 'TOOL' },
-  },
-  markdown: {
-    heading: colors.secondary,
-    code: colors.success,
-    link: colors.info,
-    quote: colors.gray[500],
-    list: colors.text,
-    bold: colors.warning,
-    italic: colors.primary,
-  },
-};
+// 使用主题样式
+const theme = themeStyles;
 
 /**
  * Props for the MessageBox component

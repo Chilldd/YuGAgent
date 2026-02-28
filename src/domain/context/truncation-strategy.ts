@@ -244,7 +244,7 @@ export class SmartTruncationStrategy implements ITruncationStrategy {
 
     // Explicit importance score from metadata
     const importanceScore = message.metadata?.importance as number | undefined;
-    if (importanceScore !== undefined) {
+    if (importanceScore !== undefined && typeof importanceScore === 'number' && !isNaN(importanceScore)) {
       score += importanceScore * 100;
     }
 

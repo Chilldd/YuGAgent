@@ -117,4 +117,46 @@ export interface IContextManager {
    * @param checkpointId - The checkpoint ID to remove
    */
   removeCheckpoint(checkpointId: string): void;
+
+  /**
+   * Get the context (alias for getMessages)
+   * @returns Array of messages
+   */
+  getContext(): ChatMessage[];
+
+  /**
+   * Get all checkpoint IDs
+   * @returns Array of checkpoint IDs
+   */
+  getCheckpoints(): string[];
+
+  /**
+   * Clear all checkpoints
+   */
+  clearCheckpoints(): void;
+
+  /**
+   * Get the number of messages in context (excluding system prompt)
+   * @returns Message count
+   */
+  getMessageCount(): number;
+
+  /**
+   * Get the last N messages from the context
+   * @param count - Number of messages to retrieve
+   * @returns Array of the last N messages
+   */
+  getLastMessages(count: number): ChatMessage[];
+
+  /**
+   * Remove the last message from context
+   * @returns The removed message or undefined if no messages
+   */
+  popMessage(): ChatMessage | undefined;
+
+  /**
+   * Get the memory manager instance
+   * @returns The memory manager or undefined
+   */
+  getMemoryManager(): import('../memory/interface.js').IMemoryManager | undefined;
 }

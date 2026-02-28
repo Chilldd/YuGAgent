@@ -43,7 +43,15 @@ describe('DirectoryListTool', () => {
     const tool = new DirectoryListTool(100, 10);
     const result = await tool.execute({ path: root, recursive: true, showHidden: true });
 
-    expect(result.entries.some((entry) => entry.path.endsWith('/.hidden'))).toBe(true);
-    expect(result.entries.some((entry) => entry.path.endsWith('/.hidden/inside.txt'))).toBe(true);
+    // 检查是否包含隐藏目录和其中的文件（兼容Windows和Unix路径分隔符）
+    const hasHiddenDir = result.entries.some((entry) =>
+      entry.path.endsWith('.hidden') || entry.path.endsWith('/.hidden') || entry.path.endsWith('\\.hidden')
+    );
+    const hasInsideFile = result.entries.some((entry) =>
+      entry.name === 'inside.txt' && entry.path.includes('.hidden')
+    );
+
+    expect(hasHiddenDir).toBe(true);
+    expect(hasInsideFile).toBe(true);
   });
 });

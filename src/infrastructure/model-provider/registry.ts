@@ -36,8 +36,9 @@ interface ProviderRegistration {
 
 /**
  * Provider factory function type
+ * Supports both synchronous and asynchronous factory creation
  */
-type ProviderFactory = (config: ModelProviderConfig) => IModelProvider;
+type ProviderFactory = (config: ModelProviderConfig) => IModelProvider | Promise<IModelProvider>;
 
 /**
  * Model Provider Registry
@@ -243,18 +244,19 @@ export class ModelProviderRegistry {
    * @returns Created provider instance
    * @throws Error if factory is not registered for the type
    */
-  createAndRegister(
+  async createAndRegister(
     type: ProviderType,
     config: ModelProviderConfig,
     providerId: string,
     isDefault = false,
-  ): IModelProvider {
+  ): Promise<IModelProvider> {
     const factory = this.factories.get(type);
     if (!factory) {
       throw new Error(`No factory registered for provider type '${type}'`);
     }
 
-    const provider = factory(config);
+    // step1. 调用工厂函数（可能是异步的）
+    const provider = await Promise.resolve(factory(config));
     this.register(providerId, provider, type, isDefault);
 
     return provider;
@@ -266,13 +268,10 @@ export class ModelProviderRegistry {
    */
   private registerBuiltInFactories(): void {
     // Zhipu factory - imported dynamically to avoid circular dependency
-    this.registerFactory(ProviderType.ZHIPU, (config: ModelProviderConfig) => {
+    this.registerFactory(ProviderType.ZHIPU, async (config: ModelProviderConfig) => {
       // Dynamic import to avoid circular dependency
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-      return import('./zhipu/adapter.js').then(({ ZhipuModelProvider }) => {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-        return new ZhipuModelProvider(config as ZhipuConfig);
-      }) as unknown as IModelProvider;
+      const { ZhipuModelProvider } = await import('./zhipu/adapter.js');
+      return new ZhipuModelProvider(config as ZhipuConfig);
     });
 
     // Additional factories will be registered here as new providers are implemented

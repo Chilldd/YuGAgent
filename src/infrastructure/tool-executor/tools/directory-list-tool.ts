@@ -6,6 +6,7 @@
 import { readdir, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { resolve, normalize, join } from 'node:path';
+import { validateAndResolvePath } from '../utils/path-validator.js';
 
 /**
  * Directory entry information
@@ -84,21 +85,25 @@ export class DirectoryListTool {
   async execute(parameters: DirectoryListToolParameters): Promise<DirectoryListToolResult> {
     const { path, recursive = false, showHidden = false, maxDepth } = parameters;
 
-    // Resolve and normalize the path
-    const resolvedPath = resolve(normalize(path));
-
-    // Check if directory exists
-    if (!existsSync(resolvedPath)) {
-      throw new Error(`Directory not found: ${resolvedPath}`);
+    // step1. 验证路径
+    const pathValidation = validateAndResolvePath(path, true, 'directory');
+    if (!pathValidation.isValid) {
+      throw new Error(pathValidation.error);
     }
+    const resolvedPath = pathValidation.resolvedPath!;
 
-    // Check if path is a directory
+    // step2. 检查路径是否为目录
     const pathStat = await stat(resolvedPath);
     if (!pathStat.isDirectory()) {
       throw new Error(`Path is not a directory: ${resolvedPath}`);
     }
 
+    // step3. 验证深度限制
     const depthLimit = maxDepth ?? this.maxDepth;
+    if (depthLimit < 0 || depthLimit > 100) {
+      throw new Error('maxDepth must be between 0 and 100');
+    }
+
     const entries: DirectoryEntry[] = [];
     let wasTruncated = false;
 
@@ -261,10 +266,19 @@ export class DirectoryListTool {
    * @param maxDepth - New maximum recursion depth
    */
   updateConfig(maxEntries?: number, maxDepth?: number): void {
+    // step1. 验证 maxEntries 参数
     if (maxEntries !== undefined) {
+      if (typeof maxEntries !== 'number' || maxEntries < 1 || maxEntries > 100000) {
+        throw new Error('maxEntries must be a number between 1 and 100000');
+      }
       this.maxEntries = maxEntries;
     }
+
+    // step2. 验证 maxDepth 参数
     if (maxDepth !== undefined) {
+      if (typeof maxDepth !== 'number' || maxDepth < 0 || maxDepth > 100) {
+        throw new Error('maxDepth must be a number between 0 and 100');
+      }
       this.maxDepth = maxDepth;
     }
   }

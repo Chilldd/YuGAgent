@@ -12,7 +12,7 @@ import type {
   IHooksManager,
   IToolExecutor,
 } from '../../../src/domain/agent/interface.js';
-import type { AgentConfig, ChatMessage, ToolCall, TokenUsage } from '../../../src/domain/agent/types.js';
+import type { AgentConfig, ChatMessage, ToolCall, TokenUsage, MessageRole } from '../../../src/domain/agent/types.js';
 import type { ModelCompleteResponse } from '../../../src/infrastructure/model-provider/interface.js';
 
 // Mock implementations
@@ -108,7 +108,8 @@ class MockContextManager implements IContextManager {
   getStats() {
     return {
       messageCount: this.messages.length,
-      totalTokens: 0,
+      estimatedTokens: 0,
+      utilizationPercent: 0,
     };
   }
 

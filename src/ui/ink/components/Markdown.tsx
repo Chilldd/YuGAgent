@@ -6,23 +6,10 @@
 import React from 'react';
 import { Text, Box } from 'ink';
 import { marked } from 'marked';
-import type { colors, themeStyles } from '../theme/colors.js';
+import { themeStyles } from '../theme/colors.js';
 
-// Import theme styles
-const theme: typeof themeStyles = {
-  status: { idle: { color: '', label: '' }, processing: { color: '', label: '' }, error: { color: '', label: '' }, thinking: { color: '', label: '' } },
-  toolStatus: { pending: { color: '', label: '' }, running: { color: '', label: '' }, success: { color: '', label: '' }, error: { color: '', label: '' } },
-  messageBox: { user: { border: '', background: '', icon: '' }, assistant: { border: '', background: '', icon: '' }, system: { border: '', background: '', icon: '' }, tool: { border: '', background: '', icon: '' } },
-  markdown: {
-    heading: '#8b5cf6',
-    code: '#10b981',
-    link: '#3b82f6',
-    quote: '#6b7280',
-    list: '#f9fafb',
-    bold: '#f59e0b',
-    italic: '#6366f1',
-  },
-};
+// 使用主题样式
+const theme = themeStyles;
 
 /**
  * Props for the Markdown component
@@ -46,7 +33,7 @@ export const Markdown: React.FC<MarkdownProps> = ({ content, maxWidth = 80, high
   return (
     <Box flexDirection="column" width={maxWidth}>
       {tokens.map((token, index) => (
-        <MarkdownToken key={index} token={token} maxWidth={maxWidth} highlight={highlight} />
+        <MarkdownToken key={index} token={token as any} maxWidth={maxWidth} highlight={highlight} />
       ))}
     </Box>
   );
@@ -56,7 +43,7 @@ export const Markdown: React.FC<MarkdownProps> = ({ content, maxWidth = 80, high
  * Props for individual token rendering
  */
 interface TokenProps {
-  token: marked.Token;
+  token: any;
   maxWidth: number;
   highlight: boolean;
 }
@@ -67,7 +54,7 @@ interface TokenProps {
 const MarkdownToken: React.FC<TokenProps> = ({ token, maxWidth, highlight }) => {
   switch (token.type) {
     case 'heading': {
-      const headingToken = token as marked.Tokens.Heading;
+      const headingToken = token as any;
       const depth = headingToken.depth;
       const prefix = '#'.repeat(depth);
       const color = highlight ? theme.markdown.heading : undefined;
@@ -81,7 +68,7 @@ const MarkdownToken: React.FC<TokenProps> = ({ token, maxWidth, highlight }) => 
     }
 
     case 'paragraph': {
-      const paragraphToken = token as marked.Tokens.Paragraph;
+      const paragraphToken = token as any;
       return (
         <Box marginBottom={1}>
           <Text>{paragraphToken.text}</Text>
@@ -90,7 +77,7 @@ const MarkdownToken: React.FC<TokenProps> = ({ token, maxWidth, highlight }) => 
     }
 
     case 'code': {
-      const codeToken = token as marked.Tokens.Code;
+      const codeToken = token as any;
       const lines = codeToken.text.split('\n');
       return (
         <Box
@@ -101,7 +88,7 @@ const MarkdownToken: React.FC<TokenProps> = ({ token, maxWidth, highlight }) => 
           marginBottom={1}
           width={maxWidth}
         >
-          {lines.map((line, i) => (
+          {lines.map((line: string, i: number) => (
             <Text key={i} dimColor={!highlight}>
               {line || ' '}
             </Text>
@@ -111,7 +98,7 @@ const MarkdownToken: React.FC<TokenProps> = ({ token, maxWidth, highlight }) => 
     }
 
     case 'codespan': {
-      const codespanToken = token as marked.Tokens.Codespan;
+      const codespanToken = token as any;
       return (
         <Text backgroundColor={highlight ? theme.markdown.code : undefined} color="#000">
           {codespanToken.text}
@@ -120,10 +107,10 @@ const MarkdownToken: React.FC<TokenProps> = ({ token, maxWidth, highlight }) => 
     }
 
     case 'list': {
-      const listToken = token as marked.Tokens.List;
+      const listToken = token as any;
       return (
         <Box flexDirection="column" marginBottom={1}>
-          {listToken.items.map((item, i) => (
+          {listToken.items.map((item: any, i: number) => (
             <ListItem key={i} item={item} ordered={listToken.ordered} index={i} highlight={highlight} />
           ))}
         </Box>
@@ -131,7 +118,7 @@ const MarkdownToken: React.FC<TokenProps> = ({ token, maxWidth, highlight }) => 
     }
 
     case 'blockquote': {
-      const quoteToken = token as marked.Tokens.Blockquote;
+      const quoteToken = token as any;
       const lines = quoteToken.text.split('\n');
       return (
         <Box
@@ -142,7 +129,7 @@ const MarkdownToken: React.FC<TokenProps> = ({ token, maxWidth, highlight }) => 
           paddingLeft={1}
           marginBottom={1}
         >
-          {lines.map((line, i) => (
+          {lines.map((line: string, i: number) => (
             <Text key={i} dimColor>
               {line}
             </Text>
@@ -152,7 +139,7 @@ const MarkdownToken: React.FC<TokenProps> = ({ token, maxWidth, highlight }) => 
     }
 
     case 'link': {
-      const linkToken = token as marked.Tokens.Link;
+      const linkToken = token as any;
       return (
         <Text color={highlight ? theme.markdown.link : undefined} underline>
           {linkToken.text}
@@ -161,7 +148,7 @@ const MarkdownToken: React.FC<TokenProps> = ({ token, maxWidth, highlight }) => 
     }
 
     case 'strong': {
-      const strongToken = token as marked.Tokens.Strong;
+      const strongToken = token as any;
       return (
         <Text bold color={highlight ? theme.markdown.bold : undefined}>
           {strongToken.text}
@@ -170,7 +157,7 @@ const MarkdownToken: React.FC<TokenProps> = ({ token, maxWidth, highlight }) => 
     }
 
     case 'em': {
-      const emToken = token as marked.Tokens.Em;
+      const emToken = token as any;
       return (
         <Text italic color={highlight ? theme.markdown.italic : undefined}>
           {emToken.text}
@@ -195,7 +182,7 @@ const MarkdownToken: React.FC<TokenProps> = ({ token, maxWidth, highlight }) => 
  * Props for list item rendering
  */
 interface ListItemProps {
-  item: marked.Tokens.ListItem;
+  item: any;
   ordered: boolean;
   index: number;
   highlight: boolean;
@@ -209,8 +196,8 @@ const ListItem: React.FC<ListItemProps> = ({ item, ordered, index, highlight }) 
   const color = highlight ? theme.markdown.list : undefined;
 
   // Handle nested lists
-  if (item.tokens.length > 0) {
-    const hasNestedList = item.tokens.some(t => t.type === 'list');
+  if (item.tokens && item.tokens.length > 0) {
+    const hasNestedList = item.tokens.some((t: any) => t.type === 'list');
 
     if (hasNestedList) {
       return (
@@ -219,7 +206,7 @@ const ListItem: React.FC<ListItemProps> = ({ item, ordered, index, highlight }) 
             {prefix} {item.text}
           </Text>
           <Box paddingLeft={2}>
-            {item.tokens.map((token, i) => (
+            {item.tokens.map((token: any, i: number) => (
               token.type === 'list' ? (
                 <MarkdownToken key={i} token={token} maxWidth={80} highlight={highlight} />
               ) : null

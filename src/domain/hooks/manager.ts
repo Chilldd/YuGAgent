@@ -158,16 +158,18 @@ export class HooksManager implements IHooksManager {
       }
 
       try {
-        if (hook.options.async) {
-          await hook.handler(fullContext);
-        } else {
-          // Execute synchronously but don't await
-          hook.handler(fullContext);
-        }
+        // step1. 始终等待钩子处理完成，避免竞态条件
+        // step2. 即使是同步钩子，也使用 Promise.resolve 包装以确保执行顺序
+        await Promise.resolve(hook.handler(fullContext));
       } catch (error) {
         // Hook execution errors should not break other hooks
-        // In production, this should use a proper logger
-        console.error(`Hook error in ${event} (hook: ${hook.id}):`, error);
+        // 记录详细的错误信息（包括钩子 ID、事件类型和错误堆栈）
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorStack = error instanceof Error ? error.stack : undefined;
+        console.error(
+          `[HooksManager] Hook error in ${event} (hook: ${hook.id}): ${errorMessage}`,
+          errorStack ? `\nStack: ${errorStack}` : ''
+        );
       }
 
       // Mark one-time hooks for removal

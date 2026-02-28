@@ -18,6 +18,7 @@ import type {
   AgentConfig,
   TokenUsage,
 } from './types.js';
+import { MessageRole } from './types.js';
 
 /**
  * Default system prompt for YuGAgent
@@ -141,7 +142,7 @@ export class AgentOrchestrator extends EventEmitter {
    */
   private initializeContext(): void {
     const systemMessage: ChatMessage = {
-      role: 'system' as any,
+      role: MessageRole.SYSTEM,
       content: this.buildSystemPrompt(),
       metadata: {
         sessionId: this.sessionId,
@@ -154,33 +155,65 @@ export class AgentOrchestrator extends EventEmitter {
   }
 
   /**
+   * Validate user input before processing
+   * @param userInput - The user's input to validate
+   * @throws Error if input is invalid
+   */
+  private validateUserInput(userInput: string): void {
+    // step1. 检查输入类型
+    if (typeof userInput !== 'string') {
+      throw new Error('User input must be a string');
+    }
+
+    // step2. 检查输入长度（空或仅空白）
+    const trimmedInput = userInput.trim();
+    if (trimmedInput.length === 0) {
+      throw new Error('User input cannot be empty');
+    }
+
+    // step3. 检查最大长度限制（防止内存溢出）
+    const MAX_INPUT_LENGTH = 100000; // 100KB
+    if (userInput.length > MAX_INPUT_LENGTH) {
+      throw new Error(`User input exceeds maximum length of ${MAX_INPUT_LENGTH} characters`);
+    }
+
+    // step4. 检查合理的字符范围（防止控制字符攻击）
+    const controlCharPattern = /[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]/;
+    if (controlCharPattern.test(userInput)) {
+      throw new Error('User input contains invalid control characters');
+    }
+  }
+
+  /**
    * Process user input and return the agent's response
    *
    * @param userInput - The user's input text
    * @returns Promise resolving to the thought loop result
    */
   async processUserInput(userInput: string): Promise<ThoughtLoopResult> {
+    // step1. 验证用户输入
+    this.validateUserInput(userInput);
+
+    // step2. 检查是否正在处理
     if (this.processingState.isProcessing) {
       throw new Error('Agent is already processing a request');
     }
 
     this.processingState.isProcessing = true;
     this.processingState.currentIteration = 0;
-    delete this.processingState.lastError;
+    this.processingState.lastError = undefined;
 
     try {
       // Trigger start hook
       await this.hooksManager.emit('start' as any, {
-        event: 'start' as any,
         sessionId: this.sessionId,
-        timestamp: new Date(),
         messages: this.contextManager.getMessages(),
         data: { userInput },
       });
 
       // Add user message to context
       const userMessage: ChatMessage = {
-        role: 'user' as any,
+        role: MessageRole.USER,
         content: userInput,
         metadata: {
           sessionId: this.sessionId,
@@ -195,9 +228,7 @@ export class AgentOrchestrator extends EventEmitter {
 
       // Trigger complete hook
       await this.hooksManager.emit('complete' as any, {
-        event: 'complete' as any,
         sessionId: this.sessionId,
-        timestamp: new Date(),
         messages: this.contextManager.getMessages(),
         data: { result },
       });
@@ -209,9 +240,7 @@ export class AgentOrchestrator extends EventEmitter {
 
       // Trigger error hook
       await this.hooksManager.emit('error' as any, {
-        event: 'error' as any,
         sessionId: this.sessionId,
-        timestamp: new Date(),
         messages: this.contextManager.getMessages(),
         error: err,
         data: {},
@@ -246,9 +275,7 @@ export class AgentOrchestrator extends EventEmitter {
 
       // Trigger thinking hook
       await this.hooksManager.emit('thinking' as any, {
-        event: 'thinking' as any,
         sessionId: this.sessionId,
-        timestamp: new Date(),
         messages: this.contextManager.getMessages(),
         data: { iteration: iteration + 1 },
       });
@@ -258,9 +285,7 @@ export class AgentOrchestrator extends EventEmitter {
 
       // Trigger before send hook
       await this.hooksManager.emit('beforeSend' as any, {
-        event: 'beforeSend' as any,
         sessionId: this.sessionId,
-        timestamp: new Date(),
         messages,
         data: { iteration: iteration + 1 },
       });
@@ -283,9 +308,7 @@ export class AgentOrchestrator extends EventEmitter {
 
       // Trigger after receive hook
       await this.hooksManager.emit('afterReceive' as any, {
-        event: 'afterReceive' as any,
         sessionId: this.sessionId,
-        timestamp: new Date(),
         messages,
         data: {
           iteration: iteration + 1,
@@ -295,7 +318,7 @@ export class AgentOrchestrator extends EventEmitter {
 
       // Add assistant response to context
       const assistantMessage: ChatMessage = {
-        role: 'assistant' as any,
+        role: MessageRole.ASSISTANT,
         content: modelResponse.text,
         toolCalls: modelResponse.toolCalls,
         metadata: {
@@ -319,7 +342,7 @@ export class AgentOrchestrator extends EventEmitter {
         // Add tool results to context
         for (const result of toolResults) {
           const toolMessage: ChatMessage = {
-            role: 'tool' as any,
+            role: MessageRole.TOOL,
             content: result.success ? (result.output ?? '') : (result.error ?? 'Tool execution failed'),
             toolCallId: result.toolCallId,
             metadata: {
@@ -383,13 +406,32 @@ export class AgentOrchestrator extends EventEmitter {
       // Parse arguments
       let args: Record<string, unknown>;
       try {
+        // step1. 尝试使用预解析的参数
         args = toolCall.args ?? JSON.parse(toolCall.arguments);
+
+        // step2. 验证解析后的参数是对象类型
+        if (typeof args !== 'object' || args === null) {
+          throw new Error('Tool arguments must be a valid object');
+        }
+
+        // step3. 验证参数大小（防止 DoS）
+        const argsString = JSON.stringify(args);
+        if (argsString.length > 100000) { // 100KB 限制
+          throw new Error('Tool arguments exceed maximum size');
+        }
+
+        // step4. 验证参数数量
+        const paramCount = Object.keys(args).length;
+        if (paramCount > 100) {
+          throw new Error('Too many parameters (max: 100)');
+        }
       } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
         const result: ToolResult = {
           toolCallId: toolCall.id,
           toolName: toolCall.name,
           success: false,
-          error: `Failed to parse tool arguments: ${error}`,
+          error: `Failed to parse tool arguments: ${errorMessage}`,
         };
         results.push(result);
         continue;
@@ -397,9 +439,7 @@ export class AgentOrchestrator extends EventEmitter {
 
       // Trigger before tool hook
       await this.hooksManager.emit('beforeTool' as any, {
-        event: 'beforeTool' as any,
         sessionId: this.sessionId,
-        timestamp: new Date(),
         messages: this.contextManager.getMessages(),
         toolCall,
         data: { args },
@@ -407,9 +447,7 @@ export class AgentOrchestrator extends EventEmitter {
 
       // Trigger security check hook
       await this.hooksManager.emit('securityCheck' as any, {
-        event: 'securityCheck' as any,
         sessionId: this.sessionId,
-        timestamp: new Date(),
         messages: this.contextManager.getMessages(),
         toolCall,
         data: { args },
@@ -448,9 +486,7 @@ export class AgentOrchestrator extends EventEmitter {
 
         // Trigger after tool hook
         await this.hooksManager.emit('afterTool' as any, {
-          event: 'afterTool' as any,
           sessionId: this.sessionId,
-          timestamp: new Date(),
           messages: this.contextManager.getMessages(),
           toolCall,
           toolResult: result,
@@ -472,9 +508,7 @@ export class AgentOrchestrator extends EventEmitter {
 
         // Trigger tool error hook
         await this.hooksManager.emit('toolError' as any, {
-          event: 'toolError' as any,
           sessionId: this.sessionId,
-          timestamp: new Date(),
           messages: this.contextManager.getMessages(),
           toolCall,
           error: err,

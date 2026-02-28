@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 
 import type {
   IToolExecutor,
-  ToolDefinition,
+  ToolExecutionDefinition,
   ToolExecuteRequest,
   ToolExecuteResponse,
   SecurityRule,
@@ -43,7 +43,7 @@ type ToolHandler = (params: any, context?: any) => Promise<any>;
  */
 export class ToolExecutor implements IToolExecutor {
   private securityChain: SecurityChain;
-  private tools: Map<string, ToolDefinition>;
+  private tools: Map<string, ToolExecutionDefinition>;
   private handlers: Map<string, ToolHandler>;
   private builtinTools: Map<string, ToolHandler>;
   private config: Required<ToolExecutorConfig>;
@@ -108,7 +108,7 @@ export class ToolExecutor implements IToolExecutor {
    * @param tool - The tool definition
    * @param handler - Function to handle tool execution
    */
-  registerTool(tool: ToolDefinition, handler: ToolHandler): void {
+  registerTool(tool: ToolExecutionDefinition, handler: ToolHandler): void {
     if (this.tools.has(tool.name)) {
       throw new Error(`Tool '${tool.name}' is already registered`);
     }
@@ -133,7 +133,7 @@ export class ToolExecutor implements IToolExecutor {
    * Get all registered tools
    * @returns Map of tool name to tool definition
    */
-  getTools(): Map<string, ToolDefinition> {
+  getTools(): Map<string, ToolExecutionDefinition> {
     return new Map(this.tools);
   }
 
@@ -142,7 +142,7 @@ export class ToolExecutor implements IToolExecutor {
    * @param toolName - Name of the tool
    * @returns The tool definition or undefined
    */
-  getTool(toolName: string): ToolDefinition | undefined {
+  getTool(toolName: string): ToolExecutionDefinition | undefined {
     return this.tools.get(toolName);
   }
 
@@ -267,27 +267,54 @@ export class ToolExecutor implements IToolExecutor {
    * @param parameters - The parameters to validate
    * @returns Error message if validation fails, undefined otherwise
    */
-  private validateParameters(tool: ToolDefinition, parameters: any): string | undefined {
+  private validateParameters(tool: ToolExecutionDefinition, parameters: any): string | undefined {
     const schema = tool.inputSchema;
     const required = schema.required || [];
 
-    // Check required parameters
+    // step1. 验证参数对象
+    if (!parameters || typeof parameters !== 'object') {
+      return 'Parameters must be a valid object';
+    }
+
+    // step2. 验证参数数量
+    const paramCount = Object.keys(parameters).length;
+    if (paramCount > 100) {
+      return 'Too many parameters (max: 100)';
+    }
+
+    // step3. 检查必需参数
     for (const paramName of required) {
       if (!(paramName in parameters)) {
         return `Missing required parameter: ${paramName}`;
       }
     }
 
-    // Validate parameter types
+    // step4. 验证每个参数
     for (const [paramName, paramValue] of Object.entries(parameters)) {
       const paramSchema = schema.properties[paramName];
       if (!paramSchema) {
         return `Unknown parameter: ${paramName}`;
       }
 
-      // Type validation
-      if (paramSchema.enum && !paramSchema.enum.includes(paramValue)) {
-        return `Parameter '${paramName}' must be one of: ${paramSchema.enum.join(', ')}`;
+      // 类型验证
+      if (paramSchema.enum && !paramSchema.enum.includes(paramValue as never)) {
+        return `Parameter '${paramName}' must be one of: ${(paramSchema.enum as string[]).join(', ')}`;
+      }
+
+      // step5. 验证字符串参数长度
+      if (typeof paramValue === 'string') {
+        const MAX_STRING_LENGTH = 10000;
+        if (paramValue.length > MAX_STRING_LENGTH) {
+          return `Parameter '${paramName}' exceeds maximum length of ${MAX_STRING_LENGTH}`;
+        }
+      }
+
+      // step6. 验证数组参数大小
+      if (Array.isArray(paramValue)) {
+        const MAX_ARRAY_LENGTH = 1000;
+        if (paramValue.length > MAX_ARRAY_LENGTH) {
+          return `Parameter '${paramName}' array exceeds maximum length of ${MAX_ARRAY_LENGTH}`;
+        }
       }
     }
 
@@ -330,7 +357,7 @@ export class ToolExecutor implements IToolExecutor {
    * List all available tools
    * @returns Array of tool definitions
    */
-  listTools(): ToolDefinition[] {
+  listTools(): ToolExecutionDefinition[] {
     return Array.from(this.tools.values());
   }
 

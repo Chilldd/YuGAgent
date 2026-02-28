@@ -68,6 +68,8 @@ export class ChatController {
   private readonly service: AIService;
   private readonly controllerId: string;
   private readonly eventListeners: Map<string, Set<ControllerEventListener>>;
+  /** Service event handler references for cleanup */
+  private readonly serviceEventHandlers: Array<{ event: string; handler: (...args: any[]) => void }> = [];
 
   /**
    * Create a new ChatController
@@ -159,10 +161,18 @@ export class ChatController {
    * @param listener - The event listener function
    */
   once(event: ControllerEventType, listener: ControllerEventListener): void {
+    // step1. 使用 WeakMap 或 Map 来跟踪一次性监听器，避免内存泄漏
+    // step2. 确保包装函数可以被正确移除
     const wrappedListener: ControllerEventListener = async (data) => {
-      await listener(data);
-      this.off(event, wrappedListener);
+      try {
+        await listener(data);
+      } finally {
+        // step3. 无论如何都移除监听器，防止内存泄漏
+        this.off(event, wrappedListener);
+      }
     };
+    // step4. 标记这是一个一次性监听器，用于调试
+    (wrappedListener as any).__once = true;
     this.on(event, wrappedListener);
   }
 
@@ -220,7 +230,13 @@ export class ChatController {
    * Shutdown the controller and cleanup resources
    */
   shutdown(): void {
-    // Emit shutdown event
+    // step1. 移除所有 service 事件监听器，防止内存泄漏
+    for (const { event, handler } of this.serviceEventHandlers) {
+      this.service.off(event, handler);
+    }
+    this.serviceEventHandlers.length = 0;
+
+    // step2. 触发关闭事件
     this.emit(ControllerEventType.SHUTDOWN, {
       timestamp: new Date(),
       data: {
@@ -228,10 +244,10 @@ export class ChatController {
       },
     });
 
-    // Remove all event listeners
+    // step3. 移除所有控制器事件监听器
     this.removeAllListeners();
 
-    // Shutdown the service
+    // step4. 关闭服务
     this.service.shutdown();
   }
 
@@ -239,74 +255,55 @@ export class ChatController {
    * Setup event forwarding from the AI service
    */
   private setupServiceEventForwarding(): void {
-    // Forward 'initialized' event
-    this.service.on('initialized', (data: any) => {
-      this.emit(ControllerEventType.INITIALIZED, {
-        timestamp: new Date(),
-        sessionId: data.sessionId,
-        data,
-      });
-    });
+    // step1. 定义事件转发辅助函数
+    const forwardEvent = (serviceName: string, controllerType: ControllerEventType, dataMapper: (data: any) => Omit<ControllerEventData, 'type'>) => {
+      const handler = (data: any) => {
+        this.emit(controllerType, {
+          timestamp: new Date(),
+          ...dataMapper(data),
+        });
+      };
+      this.service.on(serviceName, handler);
+      this.serviceEventHandlers.push({ event: serviceName, handler });
+    };
 
-    // Forward 'beforeMessage' event
-    this.service.on('beforeMessage', (data: any) => {
-      this.emit(ControllerEventType.BEFORE_MESSAGE, {
-        timestamp: new Date(),
-        sessionId: data.sessionId,
-        data,
-      });
-    });
+    // step2. 注册所有事件转发
+    forwardEvent('initialized', ControllerEventType.INITIALIZED, (data) => ({
+      sessionId: data.sessionId,
+      data,
+    }));
 
-    // Forward 'afterMessage' event
-    this.service.on('afterMessage', (data: any) => {
-      this.emit(ControllerEventType.AFTER_MESSAGE, {
-        timestamp: new Date(),
-        sessionId: data.response?.sessionId,
-        data,
-      });
-    });
+    forwardEvent('beforeMessage', ControllerEventType.BEFORE_MESSAGE, (data) => ({
+      sessionId: data.sessionId,
+      data,
+    }));
 
-    // Forward 'messageError' event
-    this.service.on('messageError', (data: any) => {
-      this.emit(ControllerEventType.MESSAGE_ERROR, {
-        timestamp: new Date(),
-        data,
-      });
-    });
+    forwardEvent('afterMessage', ControllerEventType.AFTER_MESSAGE, (data) => ({
+      sessionId: data.response?.sessionId,
+      data,
+    }));
 
-    // Forward 'historyCleared' event
-    this.service.on('historyCleared', (data: any) => {
-      this.emit(ControllerEventType.HISTORY_CLEARED, {
-        timestamp: new Date(),
-        sessionId: data.sessionId,
-        data,
-      });
-    });
+    forwardEvent('messageError', ControllerEventType.MESSAGE_ERROR, (data) => ({
+      data,
+    }));
 
-    // Forward 'clearHistoryError' event
-    this.service.on('clearHistoryError', (data: any) => {
-      this.emit(ControllerEventType.CLEAR_HISTORY_ERROR, {
-        timestamp: new Date(),
-        sessionId: data.sessionId,
-        data,
-      });
-    });
+    forwardEvent('historyCleared', ControllerEventType.HISTORY_CLEARED, (data) => ({
+      sessionId: data.sessionId,
+      data,
+    }));
 
-    // Forward 'hook' events
-    this.service.on('hook', (data: any) => {
-      this.emit(ControllerEventType.HOOK_EVENT, {
-        timestamp: new Date(),
-        data,
-      });
-    });
+    forwardEvent('clearHistoryError', ControllerEventType.CLEAR_HISTORY_ERROR, (data) => ({
+      sessionId: data.sessionId,
+      data,
+    }));
 
-    // Forward 'shutdown' event
-    this.service.on('shutdown', (data: any) => {
-      this.emit(ControllerEventType.SHUTDOWN, {
-        timestamp: new Date(),
-        data,
-      });
-    });
+    forwardEvent('hook', ControllerEventType.HOOK_EVENT, (data) => ({
+      data,
+    }));
+
+    forwardEvent('shutdown', ControllerEventType.SHUTDOWN, (data) => ({
+      data,
+    }));
   }
 
   /**

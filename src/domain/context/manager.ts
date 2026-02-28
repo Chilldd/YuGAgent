@@ -25,6 +25,11 @@ const DEFAULT_CONFIG: ContextWindowConfig = {
 };
 
 /**
+ * Maximum number of checkpoints to prevent memory leaks
+ */
+const MAX_CHECKPOINTS = 50;
+
+/**
  * Checkpoint for saving context state
  */
 interface ContextCheckpoint {
@@ -48,7 +53,19 @@ export class ContextManager implements IContextManager {
     private readonly memoryManager?: IMemoryManager,
     config?: Partial<ContextWindowConfig>
   ) {
+    // step1. 验证配置参数的合理性，防止极端值导致问题
+    // step2. 先合并默认配置，然后再验证和限制极端值
     this.config = { ...DEFAULT_CONFIG, ...config };
+
+    // 限制 maxMessages 在合理范围内 [0, 100000]
+    if (this.config.maxMessages !== undefined) {
+      this.config.maxMessages = Math.max(0, Math.min(this.config.maxMessages, 100000));
+    }
+    // 限制 maxTokens 在合理范围内 [0, 10000000]
+    if (this.config.maxTokens !== undefined) {
+      this.config.maxTokens = Math.max(0, Math.min(this.config.maxTokens, 10000000));
+    }
+
     this.truncationStrategy = createTruncationStrategy(this.config.truncationStrategy);
     this.checkpoints = new Map();
   }
@@ -167,15 +184,13 @@ export class ContextManager implements IContextManager {
     const allMessages = this.getMessages();
     const messageCount = allMessages.length;
 
-    let estimatedTokens = 0;
-    if (this.memoryManager) {
-      const tokenCounter = this.memoryManager.getTokenCounter();
-      const result = tokenCounter.countMessages(allMessages);
-      estimatedTokens = result.total;
-    } else {
-      // Simple fallback estimation
-      estimatedTokens = messageCount * 100;
-    }
+    // 简单的 token 估算：每个字符约 0.25 个 token，每条消息平均 100 个 token
+    let estimatedTokens = messageCount * 100;
+
+    // 如果有 memoryManager，可以使用它来获取更精确的计数
+    // 但由于接口限制，这里使用简单的估算方法
+    const totalChars = allMessages.reduce((sum, msg) => sum + msg.content.length, 0);
+    estimatedTokens = Math.max(estimatedTokens, Math.ceil(totalChars / 4));
 
     const utilizationPercent = this.config.maxTokens > 0
       ? (estimatedTokens / this.config.maxTokens) * 100
@@ -207,20 +222,26 @@ export class ContextManager implements IContextManager {
       effectiveTarget
     );
 
-    // Update messages
+    // Update messages - 分离 system 消息和其他消息
+    const resultSystemMessage = result.messages.find(m => m.role === 'system');
     this.messages = result.messages.filter(m => m.role !== 'system');
-    if (systemMessage) {
+    if (resultSystemMessage) {
+      this.systemPrompt = resultSystemMessage;
+    } else if (systemMessage) {
+      // 如果截断结果中没有 system 消息，保留原有的
       this.systemPrompt = systemMessage;
     }
 
     // Store truncated messages in memory if available
     if (this.memoryManager && result.removedCount > 0) {
-      const removedMessages = allMessages.slice(
-        0,
-        result.originalCount - result.messages.length
-      );
+      // 计算实际被移除的消息（排除 system 消息）
+      const nonSystemMessages = allMessages.filter(m => m.role !== 'system');
+      const keptMessages = result.messages.filter(m => m.role !== 'system');
+      const removedCount = nonSystemMessages.length - keptMessages.length;
 
-      if (removedMessages.length > 0) {
+      if (removedCount > 0) {
+        // 获取被移除的消息（最旧的消息）
+        const removedMessages = nonSystemMessages.slice(0, removedCount);
         this.memoryManager.addEpisode(removedMessages, 0.3);
       }
     }
@@ -231,6 +252,37 @@ export class ContextManager implements IContextManager {
    * @param config - Configuration options
    */
   setConfig(config: Partial<ContextWindowConfig>): void {
+    // step1. 验证输入参数
+    if (!config || typeof config !== 'object') {
+      throw new Error('Config must be a valid object');
+    }
+
+    // step2. 验证并限制 maxMessages
+    if (config.maxMessages !== undefined) {
+      if (typeof config.maxMessages !== 'number' || config.maxMessages < 0) {
+        throw new Error('maxMessages must be a non-negative number');
+      }
+      // 限制在合理范围内
+      config.maxMessages = Math.min(config.maxMessages, 100000);
+    }
+
+    // step3. 验证并限制 maxTokens
+    if (config.maxTokens !== undefined) {
+      if (typeof config.maxTokens !== 'number' || config.maxTokens < 0) {
+        throw new Error('maxTokens must be a non-negative number');
+      }
+      // 限制在合理范围内
+      config.maxTokens = Math.min(config.maxTokens, 10000000);
+    }
+
+    // step4. 验证 truncationStrategy
+    if (config.truncationStrategy !== undefined) {
+      const validStrategies = ['oldest', 'least-recent', 'smart'];
+      if (!validStrategies.includes(config.truncationStrategy)) {
+        throw new Error(`Invalid truncation strategy: ${config.truncationStrategy}`);
+      }
+    }
+
     this.config = { ...this.config, ...config };
 
     // Update truncation strategy if changed
@@ -294,6 +346,15 @@ export class ContextManager implements IContextManager {
     };
 
     this.checkpoints.set(id, checkpoint);
+
+    // step1. 防止 checkpoint 无限增长导致内存泄漏
+    // step2. 超过限制时，删除最旧的 checkpoint
+    if (this.checkpoints.size > MAX_CHECKPOINTS) {
+      const oldestId = Array.from(this.checkpoints.entries())
+        .sort(([, a], [, b]) => a.timestamp.getTime() - b.timestamp.getTime())[0][0];
+      this.checkpoints.delete(oldestId);
+    }
+
     return id;
   }
 
@@ -302,8 +363,15 @@ export class ContextManager implements IContextManager {
    * @param checkpointId - The checkpoint ID to restore
    */
   restoreCheckpoint(checkpointId: string): void {
+    // step1. 验证 checkpointId 参数
+    if (!checkpointId || typeof checkpointId !== 'string') {
+      throw new Error('Checkpoint ID must be a non-empty string');
+    }
+
     const checkpoint = this.checkpoints.get(checkpointId);
     if (!checkpoint) {
+      // 记录未找到的 checkpoint ID（便于调试）
+      console.warn(`[ContextManager] Checkpoint not found: ${checkpointId}`);
       throw new Error(`Checkpoint not found: ${checkpointId}`);
     }
 

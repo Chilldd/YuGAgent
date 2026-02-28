@@ -14,8 +14,29 @@ function detectRootDelete(command: string): boolean {
     /rm\s+[-rf]+\s+\/\s/,
     /del\s+\/[sS]\s+[a-zA-Z]:\\/,
     /rmdir\/[sS]\s+\/[qQ]\s+[a-zA-Z]:\\/,
+    /rm\s+[-rf]+\s+\/\*/,           // rm -rf /*
+    /rm\s+[-rf]+\s+\/\./,           // rm -rf /.
+    /rm\s+[-rf]+\s+\\/,             // Windows rm -rf \
   ];
   return dangerousPatterns.some(pattern => pattern.test(command));
+}
+
+/**
+ * Detects command injection attempts through various means
+ */
+function detectCommandInjection(command: string): boolean {
+  const injectionPatterns = [
+    /\$\([^)]*\)/,                  // $(command)
+    /`[^`]*`/,                      // `command`
+    /\|\s*\w+/,                     // pipe to command
+    /;\s*\w+/,                      // command chaining
+    /&&\s*\w+/,                     // AND execution
+    /\|\|\s*\w+/,                   // OR execution
+    />>\s*\w+/,                     // append redirection
+    />\s*\/dev\/[a-z]+/,           // device redirection
+    /\${[^}]*}/,                    // ${var} expansion
+  ];
+  return injectionPatterns.some(pattern => pattern.test(command));
 }
 
 /**
@@ -118,6 +139,24 @@ export const BUILT_IN_SECURITY_RULES: SecurityRule[] = [
           return {
             passed: false,
             error: 'Cannot execute command: deletion of root directory is prohibited for security reasons',
+          };
+        }
+      }
+      return { passed: true };
+    },
+  },
+  {
+    id: 'no-command-injection',
+    description: 'Prohibit command injection attempts',
+    severity: 'critical',
+    enabled: true,
+    validate: (request: ToolExecuteRequest) => {
+      if (request.toolName === 'terminal' && request.parameters?.command) {
+        const command = request.parameters.command as string;
+        if (detectCommandInjection(command)) {
+          return {
+            passed: false,
+            error: 'Cannot execute command: command injection patterns are prohibited for security reasons',
           };
         }
       }
@@ -293,6 +332,30 @@ export const FILE_SECURITY_RULES: SecurityRule[] = [
     },
   },
   {
+    id: 'no-path-traversal-directory',
+    description: 'Prohibit path traversal attempts in directory listing',
+    severity: 'high',
+    enabled: true,
+    validate: (request: ToolExecuteRequest) => {
+      if (request.toolName === 'directory-list' && request.parameters?.path) {
+        const path = request.parameters.path as string;
+        // 检查路径遍历模式
+        const traversalPatterns = [
+          /\.\.[\/\\]/,        // ../ 或 ..\
+          /\.\.$/,             // 以 .. 结尾
+          /%2e%2e/i,           // URL 编码的 ..
+        ];
+        if (traversalPatterns.some(pattern => pattern.test(path))) {
+          return {
+            passed: false,
+            error: 'Cannot list directory: path traversal sequences are not allowed',
+          };
+        }
+      }
+      return { passed: true };
+    },
+  },
+  {
     id: 'no-env-file-read',
     description: 'Prohibit reading .env files directly',
     severity: 'medium',
@@ -324,6 +387,33 @@ export const FILE_SECURITY_RULES: SecurityRule[] = [
           return {
             passed: false,
             error: 'Cannot read file: system-critical files are protected',
+          };
+        }
+      }
+      return { passed: true };
+    },
+  },
+  {
+    id: 'no-path-traversal',
+    description: 'Prohibit path traversal attempts in file operations',
+    severity: 'high',
+    enabled: true,
+    validate: (request: ToolExecuteRequest) => {
+      if (request.toolName === 'file-read' && request.parameters?.path) {
+        const path = request.parameters.path as string;
+        // 检查路径遍历模式
+        const traversalPatterns = [
+          /\.\.[\/\\]/,        // ../ 或 ..\
+          /\.\.$/,             // 以 .. 结尾
+          /%2e%2e/i,           // URL 编码的 ..
+          /%252e/i,           // 双重 URL 编码
+          /\.\.%5c/i,          // ..%5c (编码的 \)
+          /\.\.%2f/i,          // ..%2f (编码的 /)
+        ];
+        if (traversalPatterns.some(pattern => pattern.test(path))) {
+          return {
+            passed: false,
+            error: 'Cannot read file: path traversal sequences are not allowed',
           };
         }
       }

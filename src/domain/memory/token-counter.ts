@@ -41,6 +41,17 @@ export class TokenCounter {
    * @returns Token count result with breakdowns
    */
   countMessages(messages: ChatMessage[]): TokenCountResult {
+    // step1. 验证输入参数
+    if (!Array.isArray(messages)) {
+      throw new Error('Messages must be an array');
+    }
+
+    // step2. 验证消息数量限制（防止性能问题）
+    const MAX_MESSAGE_COUNT = 10000;
+    if (messages.length > MAX_MESSAGE_COUNT) {
+      throw new Error(`Too many messages to count (max: ${MAX_MESSAGE_COUNT})`);
+    }
+
     const byRole: Record<string, number> = {};
     const byMessage: number[] = [];
     let total = 0;
@@ -93,8 +104,21 @@ export class TokenCounter {
    * @returns Estimated token count
    */
   countText(text: string): number {
-    if (!text || text.length === 0) {
+    // step1. 验证输入参数
+    if (typeof text !== 'string') {
       return 0;
+    }
+
+    if (text.length === 0) {
+      return 0;
+    }
+
+    // step2. 验证文本长度限制（防止 DoS）
+    const MAX_TEXT_LENGTH = 10000000; // 10MB
+    if (text.length > MAX_TEXT_LENGTH) {
+      console.warn(`[TokenCounter] Text length exceeds maximum, truncating for token count`);
+      // 只对前 N 个字符进行计数
+      text = text.substring(0, MAX_TEXT_LENGTH);
     }
 
     return this.countString(text);

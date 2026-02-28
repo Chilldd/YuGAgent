@@ -89,6 +89,38 @@ export class MemoryManager implements IMemoryManager {
    * @returns Array of matching memory entries
    */
   search(options: MemoryRetrievalOptions): MemoryEntry[] {
+    // step1. 验证输入参数
+    if (!options || typeof options !== 'object') {
+      throw new Error('Search options must be a valid object');
+    }
+
+    // step2. 处理边界情况：limit 为 0 或负数时返回空数组
+    if (options.limit !== undefined && options.limit <= 0) {
+      return [];
+    }
+
+    // step3. 验证 limit 的最大值（防止 DoS）
+    if (options.limit !== undefined && options.limit > 10000) {
+      throw new Error('Limit exceeds maximum value of 10000');
+    }
+
+    // step4. 验证 minImportance 范围
+    if (options.minImportance !== undefined) {
+      if (typeof options.minImportance !== 'number' || options.minImportance < 0 || options.minImportance > 1) {
+        throw new Error('minImportance must be a number between 0 and 1');
+      }
+    }
+
+    // step5. 验证 tags 参数
+    if (options.tags !== undefined) {
+      if (!Array.isArray(options.tags)) {
+        throw new Error('tags must be an array');
+      }
+      if (options.tags.length > 100) {
+        throw new Error('Too many tags (max: 100)');
+      }
+    }
+
     let results = this.memories.values();
 
     // Filter by type
@@ -212,13 +244,35 @@ export class MemoryManager implements IMemoryManager {
    * @returns The stored memory entry
    */
   addEpisode(messages: ChatMessage[], importance: number = 0.5): MemoryEntry {
+    // step1. 验证输入参数
+    if (!Array.isArray(messages)) {
+      throw new Error('Messages must be an array');
+    }
+
+    if (messages.length === 0) {
+      throw new Error('Messages array cannot be empty');
+    }
+
+    // step2. 验证消息数量限制（防止内存溢出）
+    const MAX_MESSAGES_PER_EPISODE = 1000;
+    if (messages.length > MAX_MESSAGES_PER_EPISODE) {
+      throw new Error(`Too many messages in episode (max: ${MAX_MESSAGES_PER_EPISODE})`);
+    }
+
+    // step3. 验证 importance 参数范围
+    if (typeof importance !== 'number' || isNaN(importance)) {
+      throw new Error('Importance must be a valid number');
+    }
+
+    const clampedImportance = Math.max(0, Math.min(1, importance));
+
     const episodeContent = this.formatEpisode(messages);
     const tokensUsed = this.tokenCounter.countMessages(messages);
 
     return this.store({
       type: MemoryType.EPISODIC,
       content: episodeContent,
-      importance: Math.max(0, Math.min(1, importance)),
+      importance: clampedImportance,
       tags: ['episode', 'conversation'],
       metadata: {
         messageCount: messages.length,
@@ -302,9 +356,31 @@ export class MemoryManager implements IMemoryManager {
    * @returns Number of memories imported
    */
   import(memories: MemoryEntry[]): number {
+    // step1. 验证输入参数
+    if (!Array.isArray(memories)) {
+      throw new Error('Memories must be an array');
+    }
+
+    // step2. 验证导入数量限制
+    const MAX_IMPORT_LIMIT = 10000;
+    if (memories.length > MAX_IMPORT_LIMIT) {
+      throw new Error(`Too many memories to import (max: ${MAX_IMPORT_LIMIT})`);
+    }
+
     let importedCount = 0;
 
     for (const memory of memories) {
+      // step3. 验证每个 memory 对象的结构
+      if (!memory || typeof memory !== 'object') {
+        console.warn('[MemoryManager] Skipping invalid memory entry');
+        continue;
+      }
+
+      // step4. 验证必需字段
+      if (!memory.type || !memory.content) {
+        console.warn('[MemoryManager] Skipping memory entry missing required fields');
+        continue;
+      }
       // Generate new ID to avoid conflicts
       const importedMemory: MemoryEntry = {
         ...memory,

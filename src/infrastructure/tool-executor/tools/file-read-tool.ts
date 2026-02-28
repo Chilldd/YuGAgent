@@ -6,6 +6,7 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { resolve, normalize } from 'node:path';
+import { validateAndResolvePath, validateLineRange } from '../utils/path-validator.js';
 
 /**
  * File read tool parameters
@@ -69,31 +70,28 @@ export class FileReadTool {
   async execute(parameters: FileReadToolParameters): Promise<FileReadToolResult> {
     const { path, encoding = 'utf8', startLine, endLine } = parameters;
 
-    // Resolve and normalize the path
-    const resolvedPath = resolve(normalize(path));
-
-    // Check if file exists
-    if (!existsSync(resolvedPath)) {
-      throw new Error(`File not found: ${resolvedPath}`);
+    // step1. 验证路径
+    const pathValidation = validateAndResolvePath(path, true, 'file');
+    if (!pathValidation.isValid) {
+      throw new Error(pathValidation.error);
     }
+    const resolvedPath = pathValidation.resolvedPath!;
 
-    // Validate line range
-    if (startLine !== undefined && startLine < 1) {
-      throw new Error('startLine must be >= 1');
-    }
-
-    if (endLine !== undefined && startLine !== undefined && endLine < startLine) {
-      throw new Error('endLine must be >= startLine');
+    // step2. 验证行范围参数
+    const lineValidation = validateLineRange(startLine, endLine);
+    if (!lineValidation.isValid) {
+      throw new Error(lineValidation.error);
     }
 
     try {
-      // Read the file
+      // step3. 读取文件内容
       const content = await readFile(resolvedPath, { encoding });
       const lines = content.length === 0 ? [] : content.split('\n');
 
-      // Check file size
+      // step4. 检查文件大小（在读取后验证，避免过大的内容占用内存）
       const fileSize = Buffer.byteLength(content, encoding);
       if (fileSize > this.maxFileSize) {
+        console.warn(`[FileReadTool] File too large: ${fileSize} bytes exceeds maximum of ${this.maxFileSize} bytes`);
         throw new Error(
           `File too large: ${fileSize} bytes exceeds maximum of ${this.maxFileSize} bytes`
         );

@@ -58,7 +58,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       <Static items={visibleMessages}>
         {(message, index) => (
           <ChatMessageItem
-            key={message.metadata?.id || index}
+            key={(message.metadata?.id as string | undefined) || index}
             message={message}
             maxWidth={maxWidth}
           />
@@ -171,7 +171,7 @@ export const WelcomeMessage: React.FC<WelcomeMessageProps> = ({
         )}
         {sessionId && (
           <Text dimColor>
-            Session: <Text color={colors.gray[400]}>{sessionId.slice(0, 8)}...</Text>
+            Session: <Text color={colors.gray[400]}>{sessionId.slice(0, 8)}{sessionId.length > 8 ? '...' : ''}</Text>
           </Text>
         )}
         <Text dimColor>

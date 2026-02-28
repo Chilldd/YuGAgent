@@ -117,9 +117,6 @@ export class AIService extends EventEmitter {
         response.error = result.error.message;
       }
 
-      this.status = 'idle' as ServiceStatus;
-      this.lastActivity = new Date();
-
       // Emit after message event
       this.emit('afterMessage', {
         response,
@@ -129,17 +126,26 @@ export class AIService extends EventEmitter {
 
       return response;
     } catch (error) {
-      this.status = 'error' as ServiceStatus;
       const err = error instanceof Error ? error : new Error(String(error));
+
+      // step1. 记录详细错误信息用于调试
+      const errorDetails = {
+        name: err.name,
+        message: err.message,
+        stack: err.stack,
+        userInput: dto.message.substring(0, 100), // 只记录前100个字符
+        sessionId: this.currentSessionId,
+      };
 
       // Emit error event
       this.emit('messageError', {
         error: err,
         message: dto.message,
         timestamp: new Date(),
+        details: errorDetails,
       });
 
-      // Return error response
+      // step2. 返回友好的错误响应（不暴露内部实现细节）
       return {
         response: '',
         sessionId: this.currentSessionId || '',
@@ -152,9 +158,14 @@ export class AIService extends EventEmitter {
           totalTokens: 0,
         },
         success: false,
-        error: err.message,
+        error: this.sanitizeErrorMessage(err.message),
         timestamp: new Date().toISOString(),
       };
+    } finally {
+      // step3. 无论成功或失败，都将状态重置为 idle，以便处理后续请求
+      // step4. 如果需要保持错误状态，可以通过其他方式（如 lastError）记录
+      this.status = 'idle' as ServiceStatus;
+      this.lastActivity = new Date();
     }
   }
 
@@ -324,12 +335,12 @@ export class AIService extends EventEmitter {
 
     this.status = 'stopped' as ServiceStatus;
 
-    // Emit shutdown event
+    // Emit shutdown event before removing listeners
     this.emit('shutdown', {
       timestamp: new Date(),
     });
 
-    // Remove all listeners
+    // Remove all listeners (after emitting shutdown)
     this.removeAllListeners();
   }
 
@@ -403,5 +414,28 @@ export class AIService extends EventEmitter {
       completionTokens: tokenUsage.completionTokens,
       totalTokens: tokenUsage.totalTokens,
     };
+  }
+
+  /**
+   * 清理错误消息，防止泄露敏感信息
+   * @param errorMessage - 原始错误消息
+   * @returns 清理后的错误消息
+   */
+  private sanitizeErrorMessage(errorMessage: string): string {
+    // step1. 移除可能包含路径信息的模式
+    const pathPattern = /at\s+[^(]+\([^)]+\)/g;
+    let sanitized = errorMessage.replace(pathPattern, '(internal location)');
+
+    // step2. 移除绝对路径（Windows 和 Unix）
+    sanitized = sanitized.replace(/[A-Z]:\\[^\\]+\\?/gi, '...');
+    sanitized = sanitized.replace(/\/[^/]+\/+/g, '.../');
+
+    // step3. 限制错误消息长度
+    const MAX_ERROR_LENGTH = 500;
+    if (sanitized.length > MAX_ERROR_LENGTH) {
+      sanitized = sanitized.substring(0, MAX_ERROR_LENGTH) + '...';
+    }
+
+    return sanitized;
   }
 }

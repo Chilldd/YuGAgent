@@ -112,7 +112,7 @@ export const StatusPanel: React.FC<StatusPanelProps> = ({
       {sessionId && (
         <Box marginTop={1}>
           <Text dimColor>
-            Session: <Text color={colors.gray[400]}>{sessionId.slice(0, 12)}...</Text>
+            Session: <Text color={colors.gray[400]}>{sessionId.slice(0, 12)}{sessionId.length > 12 ? '...' : ''}</Text>
           </Text>
         </Box>
       )}
@@ -188,7 +188,7 @@ export const TokenBar: React.FC<TokenBarProps> = ({ current, max, width = 20 }) 
   const empty = width - filled;
 
   // Determine color based on usage
-  let color = colors.success;
+  let color: string = colors.success;
   if (percentage > 80) color = colors.error;
   else if (percentage > 60) color = colors.warning;
 
