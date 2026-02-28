@@ -414,28 +414,11 @@ export class AgentOrchestrator extends EventEmitter {
         finishReason: currentFinishReason,
       });
 
-      // step7. 如果有工具调用但没有文本，自动生成说明文本
-      if (currentToolCalls.length > 0 && currentText.length === 0) {
-        const toolDescriptions = currentToolCalls.map(tc => {
-          const toolName = tc.name;
-          // 根据工具类型生成中文说明
-          switch (toolName) {
-            case 'terminal':
-              const cmd = (tc.args as any)?.command || '';
-              return `执行命令：\`${cmd}\``;
-            case 'file-read':
-              const path = (tc.args as any)?.path || '';
-              return `读取文件：\`${path}\``;
-            case 'directory-list':
-              const dirPath = (tc.args as any)?.path || '.';
-              return `列出目录：\`${dirPath}\``;
-            default:
-              return `调用工具：${toolName}`;
-          }
-        });
-        currentText = toolDescriptions.join('\n\n');
+      // step7. 工具调用轮次若无文本，注入进度说明，保证对话连续性
+      if (currentToolCalls.length > 0 && currentText.trim().length === 0) {
+        currentText = this.buildToolCallProgressMessage(currentToolCalls);
 
-        // 触发流式输出事件，让 UI 实时显示
+        // 为该轮补发一个内容块事件，确保 UI 能及时显示说明
         await this.hooksManager.emit('contentChunk' as any, {
           sessionId: this.sessionId,
           messages: this.contextManager.getMessages(),
@@ -446,10 +429,22 @@ export class AgentOrchestrator extends EventEmitter {
           },
         });
 
-        logger.debug('自动生成工具调用说明文本', { text: currentText });
+        logger.debug('模型未返回文本，已注入工具调用进度说明', {
+          textLength: currentText.length,
+          toolCallsCount: currentToolCalls.length,
+        });
       }
 
-      // step8. 触发 after receive hook
+      // step8. 对空响应生成兜底总结，避免 UI 显示空白
+      if (currentToolCalls.length === 0 && currentText.trim().length === 0) {
+        currentText = this.buildFallbackSummary(allToolResults);
+        logger.warn('模型返回空响应，已生成兜底任务总结', {
+          summaryLength: currentText.length,
+          toolResultsCount: allToolResults.length,
+        });
+      }
+
+      // step9. 触发 after receive hook
       await this.hooksManager.emit('afterReceive' as any, {
         sessionId: this.sessionId,
         messages,
@@ -464,7 +459,7 @@ export class AgentOrchestrator extends EventEmitter {
         },
       });
 
-      // step9. 添加助手响应到上下文
+      // step10. 添加助手响应到上下文
       const assistantMessage: ChatMessage = {
         role: MessageRole.ASSISTANT,
         content: currentText,
@@ -479,7 +474,7 @@ export class AgentOrchestrator extends EventEmitter {
 
       this.contextManager.addMessage(assistantMessage);
 
-      // step9.1 触发消息更新事件，让 UI 立即显示助手消息
+      // step10.1 触发消息更新事件，让 UI 立即显示助手消息
       await this.hooksManager.emit('messagesUpdate' as any, {
         sessionId: this.sessionId,
         messages: this.contextManager.getMessages(),
@@ -490,7 +485,7 @@ export class AgentOrchestrator extends EventEmitter {
         },
       });
 
-      // step10. 检查是否有工具调用
+      // step11. 检查是否有工具调用
       if (currentToolCalls.length > 0) {
         logger.info(`检测到工具调用`, {
           toolNames: currentToolCalls.map(tc => tc.name),
@@ -501,11 +496,11 @@ export class AgentOrchestrator extends EventEmitter {
 
         allToolCalls.push(...currentToolCalls);
 
-        // step11. 执行工具调用
+        // step12. 执行工具调用
         const toolResults = await this.executeToolCalls(currentToolCalls);
         allToolResults.push(...toolResults);
 
-        // step12. 添加工具结果到上下文
+        // step13. 添加工具结果到上下文
         for (const result of toolResults) {
           const toolMessage: ChatMessage = {
             role: MessageRole.TOOL,
@@ -523,7 +518,7 @@ export class AgentOrchestrator extends EventEmitter {
           this.contextManager.addMessage(toolMessage);
         }
 
-        // step12.1 触发消息更新事件，让 UI 立即显示当前的消息状态
+        // step13.1 触发消息更新事件，让 UI 立即显示当前的消息状态
         await this.hooksManager.emit('messagesUpdate' as any, {
           sessionId: this.sessionId,
           messages: this.contextManager.getMessages(),
@@ -534,17 +529,17 @@ export class AgentOrchestrator extends EventEmitter {
           },
         });
 
-        // step13. 继续循环
+        // step14. 继续循环
         logger.info('工具执行完成，继续思考循环');
         continue;
       }
 
-      // step14. 无工具调用 - 这是最终响应
+      // step15. 无工具调用 - 这是最终响应
       finalResponse = currentText;
       break;
     }
 
-    // step15. 检查是否达到最大迭代次数
+    // step16. 检查是否达到最大迭代次数
     if (iteration >= this.maxThoughtIterations && !finalResponse) {
       finalResponse = 'I reached the maximum number of thinking iterations. Please provide more context or simplify your request.';
     }
@@ -727,6 +722,89 @@ export class AgentOrchestrator extends EventEmitter {
   }
 
   /**
+   * 构建工具调用阶段的进度说明
+   * @param toolCalls - 当前轮次的工具调用
+   * @returns 可展示给用户的进度文本
+   */
+  private buildToolCallProgressMessage(toolCalls: ToolCall[]): string {
+    // step1. 提取工具名称并做去重
+    const toolNames = Array.from(new Set(toolCalls.map(call => call.name)));
+
+    // step2. 生成简洁且自然语言化的进度说明
+    const toolSummary = toolNames.join('、');
+    return `我正在调用工具（${toolSummary}）处理你的请求，完成后会继续给出结果说明。`;
+  }
+
+  /**
+   * 将工具结果格式化为更易读的摘要文本
+   * @param result - 工具执行结果
+   * @returns 人类可读的摘要
+   */
+  private formatToolResultSummary(result: ToolResult): string {
+    // step1. 工具失败时输出错误信息
+    if (!result.success) {
+      return `工具 ${result.toolName} 执行失败：${result.error || '未知错误'}`;
+    }
+
+    // step2. 优先解析结构化输出
+    if (result.output) {
+      try {
+        const parsed = JSON.parse(result.output);
+
+        // terminal 常见结构：{ stdout, stderr, exitCode }
+        if (parsed && typeof parsed === 'object') {
+          const stdout = typeof parsed.stdout === 'string' ? parsed.stdout.trim() : '';
+          const stderr = typeof parsed.stderr === 'string' ? parsed.stderr.trim() : '';
+          const content = typeof parsed.content === 'string' ? parsed.content.trim() : '';
+
+          if (stdout) {
+            return `已完成操作，终端输出：${stdout}`;
+          }
+          if (content) {
+            return `已完成操作，读取内容：${content}`;
+          }
+          if (stderr) {
+            return `已执行工具 ${result.toolName}，但出现提示：${stderr}`;
+          }
+        }
+      } catch {
+        // 忽略 JSON 解析失败，继续使用原始文本
+      }
+
+      // step3. 非结构化输出时做轻量截断
+      const compact = result.output.replace(/\s+/g, ' ').trim();
+      const preview = compact.length > 160 ? `${compact.slice(0, 160)}...` : compact;
+      return `已执行工具 ${result.toolName}，结果：${preview}`;
+    }
+
+    return `已执行工具 ${result.toolName}，任务已完成。`;
+  }
+
+  /**
+   * 构建模型空响应时的兜底任务总结
+   * @param toolResults - 本轮累计工具结果
+   * @returns 可展示给用户的总结文本
+   */
+  private buildFallbackSummary(toolResults: ToolResult[]): string {
+    // step1. 无工具结果时返回通用提示
+    if (toolResults.length === 0) {
+      return '任务已执行完成，但模型未返回可显示内容。';
+    }
+
+    // step2. 优先使用最后一个工具结果，生成可读总结
+    const lastResult = toolResults[toolResults.length - 1];
+    const detail = this.formatToolResultSummary(lastResult);
+
+    // step3. 附加执行统计，帮助用户理解本轮任务状态
+    const successCount = toolResults.filter(result => result.success).length;
+    const failCount = toolResults.length - successCount;
+
+    return `任务执行完成（共 ${toolResults.length} 次工具调用，成功 ${successCount} 次，失败 ${failCount} 次）。
+${detail}`;
+  }
+
+
+  /**
    * Build the system prompt with security rules
    *
    * @returns Complete system prompt string
@@ -745,6 +823,9 @@ export class AgentOrchestrator extends EventEmitter {
     if (toolsInfo) {
       prompt += '\n\n## 可用工具\n\n' + toolsInfo;
     }
+
+    // 引导模型在工具调用前后保持自然语言沟通
+    prompt += '\n\n## 对话风格要求\n\n当你准备调用工具时，请先用 1-2 句自然语言向用户说明你的计划；工具执行后，请继续用自然语言总结结果，不要只返回工具调用信息。';
 
     return prompt;
   }
