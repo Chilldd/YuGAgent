@@ -4,8 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Box, Text, render, StdinContext } from 'ink';
-import type { Stdin } from 'ink';
+import { Box, Text, render } from 'ink';
 
 import { ChatPanel, WelcomeMessage, EmptyState } from './components/ChatPanel.js';
 import { StatusPanel } from './components/StatusPanel.js';
@@ -212,9 +211,10 @@ const App: React.FC<AppProps> = ({
 
     setupListeners();
 
-    // Cleanup on unmount
+    // Cleanup on unmount - 移除所有监听器
     return () => {
       isMountedRef.current = false;
+      // 使用 removeAllListeners 清理所有事件监听器
       aiService.removeAllListeners();
     };
   }, [aiService]);
@@ -225,17 +225,30 @@ const App: React.FC<AppProps> = ({
       return;
     }
 
+    // step1. 立即添加用户消息到显示状态，实现即时反馈
+    const { MessageRole } = await import('../../domain/agent/types.js');
+    const userMessage: ChatMessage = {
+      role: MessageRole.USER,
+      content: input,
+      metadata: {
+        id: Date.now().toString(),
+        timestamp: new Date().toISOString(),
+      },
+    };
+
     setState(prev => ({
       ...prev,
+      messages: [...prev.messages, userMessage],
       isStreaming: true,
       streamingContent: '',
       status: 'processing' as ServiceStatus,
+      showWelcome: false,
     }));
 
     try {
       const response = await aiService.sendMessage({ message: input });
 
-      // Update messages from context
+      // step2. 从 context 更新完整消息列表（包含 AI 响应）
       const context = aiService.getContext();
       if (context) {
         const messages = context.getMessages();
@@ -282,17 +295,8 @@ const App: React.FC<AppProps> = ({
 
   return (
     <Box flexDirection="column" paddingX={1}>
-      {/* Header with app name */}
-      <Box marginBottom={1}>
-        <Text bold color={colors.primary}>
-          {appName} v{version}
-        </Text>
-        <Text dimColor> | </Text>
-        <StatusIndicator status={state.status} />
-      </Box>
-
       {/* Main content area */}
-      <Box flexDirection="column" marginBottom={1}>
+      <Box flexDirection="column" marginBottom={1} flexGrow={1}>
         {/* Welcome message or chat panel */}
         {state.showWelcome ? (
           <WelcomeMessage
@@ -323,16 +327,6 @@ const App: React.FC<AppProps> = ({
         )}
       </Box>
 
-      {/* Status panel */}
-      <StatusPanel
-        status={state.status}
-        tokenUsage={state.tokenUsage}
-        model={state.model}
-        sessionId={state.sessionId}
-        processingMessage={state.processingMessage}
-        maxWidth={maxWidth - 2}
-      />
-
       {/* Input box */}
       <Box marginTop={1}>
         <InputBox
@@ -347,10 +341,29 @@ const App: React.FC<AppProps> = ({
         />
       </Box>
 
-      {/* Help hint */}
-      <Box marginTop={1}>
+      {/* 状态栏 - 合并状态指示器、模型、处理消息和Token */}
+      <Box marginTop={1} paddingX={1} borderStyle="single" borderColor={colors.gray[700]}>
+        <Box justifyContent="space-between" width={maxWidth - 6}>
+          <Box>
+            <Text color={state.status === 'processing' ? colors.info : colors.success} bold>
+              {state.status === 'processing' ? '◐' : '●'} {state.model}
+            </Text>
+            {state.processingMessage && (
+              <Text dimColor> | {state.processingMessage}</Text>
+            )}
+          </Box>
+          {state.tokenUsage.totalTokens > 0 && (
+            <Text dimColor>
+              Tokens: <Text color={colors.warning}>{state.tokenUsage.totalTokens}</Text>
+            </Text>
+          )}
+        </Box>
+      </Box>
+
+      {/* Help hint - 精简 */}
+      <Box marginTop={1} justifyContent="flex-end">
         <Text dimColor>
-          Press <Text color={colors.success}>Enter</Text> to send, <Text color={colors.error}>Ctrl+C</Text> to exit
+          Enter:发送 | Ctrl+C:退出
         </Text>
       </Box>
     </Box>
@@ -412,9 +425,18 @@ export function startTUI(
     />
   );
 
-  waitUntilExit().then(() => {
-    aiService.shutdown();
-  });
+  // step1. 等待 UI 退出
+  // step2. 确保 shutdown 被调用，即使发生错误
+  waitUntilExit().then(
+    () => {
+      aiService.shutdown();
+    },
+    (error) => {
+      // step3. 如果 waitUntilExit 失败，仍然执行 shutdown
+      console.error('Error during UI shutdown:', error);
+      aiService.shutdown();
+    }
+  );
 }
 
 export default App;
