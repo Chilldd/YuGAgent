@@ -8,6 +8,8 @@ import { Box, Static, Text } from 'ink';
 import { MessageRole, ChatMessage } from '../../../domain/agent/types.js';
 import { MessageBox, StreamMessage } from './MessageBox.js';
 import { colors } from '../theme/colors.js';
+import { CatLogo } from './CatLogo.js';
+import { WelcomeInfo } from './WelcomeInfo.js';
 
 /**
  * Props for the ChatPanel component
@@ -144,40 +146,48 @@ export const WelcomeMessage: React.FC<WelcomeMessageProps> = ({
   sessionId,
   maxWidth = 80,
 }) => {
-  const width = Math.min(maxWidth, 60);
+  const isCompact = maxWidth < 60;
 
+  if (isCompact) {
+    // 紧凑版本
+    return (
+      <Box
+        flexDirection="column"
+        marginBottom={1}
+        width={maxWidth}
+        paddingX={1}
+      >
+        <CatLogo maxWidth={maxWidth} />
+        <WelcomeInfo
+          version={version}
+          model={model}
+          sessionId={sessionId}
+          maxWidth={maxWidth}
+        />
+      </Box>
+    );
+  }
+
+  // 完整版本 - 带边框
   return (
     <Box
       flexDirection="column"
       marginBottom={1}
       width={maxWidth}
       borderStyle="double"
-      borderColor={colors.primary}
+      borderColor="#FF006E"
       paddingX={1}
     >
-      {/* Title */}
-      <Box justifyContent="center" marginBottom={1}>
-        <Text bold color={colors.primary} backgroundColor={colors.gray[800]}>
-          {' '.repeat(4)}{appName} v{version}{' '.repeat(4)}
-        </Text>
-      </Box>
+      {/* Logo 区域 */}
+      <CatLogo maxWidth={maxWidth} />
 
-      {/* Info */}
-      <Box flexDirection="column">
-        {model && (
-          <Text dimColor>
-            Model: <Text color={colors.info}>{model}</Text>
-          </Text>
-        )}
-        {sessionId && (
-          <Text dimColor>
-            Session: <Text color={colors.gray[400]}>{sessionId.slice(0, 8)}{sessionId.length > 8 ? '...' : ''}</Text>
-          </Text>
-        )}
-        <Text dimColor>
-          Type <Text color={colors.success}>Ctrl+C</Text> to exit
-        </Text>
-      </Box>
+      {/* 信息区域 */}
+      <WelcomeInfo
+        version={version}
+        model={model}
+        sessionId={sessionId}
+        maxWidth={maxWidth}
+      />
     </Box>
   );
 };
