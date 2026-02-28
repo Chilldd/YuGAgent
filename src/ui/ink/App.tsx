@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Box, Text, render } from 'ink';
+import { Box, Text, render, useStdoutDimensions } from 'ink';
 
 import { ChatPanel, WelcomeMessage, EmptyState } from './components/ChatPanel.js';
 import { StatusPanel } from './components/StatusPanel.js';
@@ -43,7 +43,6 @@ interface AppState {
   processingMessage: string;
   showWelcome: boolean;
   error: string | null;
-  maxWidth: number;
 }
 
 /**
@@ -55,11 +54,6 @@ const App: React.FC<AppProps> = ({
   version = '2.0.0',
   maxWidth: propMaxWidth = 100,
 }) => {
-  // step1. 动态计算终端宽度，响应窗口大小变化
-  const calculateMaxWidth = useCallback(() => {
-    return Math.min(propMaxWidth, (process.stdout.columns || 80) - 4);
-  }, [propMaxWidth]);
-
   const [state, setState] = useState<AppState>({
     messages: [],
     streamingContent: '',
@@ -71,7 +65,6 @@ const App: React.FC<AppProps> = ({
     processingMessage: '',
     showWelcome: true,
     error: null,
-    maxWidth: calculateMaxWidth(),
   });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -226,42 +219,9 @@ const App: React.FC<AppProps> = ({
     };
   }, [aiService]);
 
-  // step2. 监听终端大小变化，使用 debounce 更新布局宽度
-  useEffect(() => {
-    let resizeTimeout: NodeJS.Timeout | null = null;
-
-    const handleResize = () => {
-      // 清除之前的定时器，实现 debounce 效果
-      if (resizeTimeout) {
-        clearTimeout(resizeTimeout);
-      }
-
-      // 延迟 100ms 执行，等待窗口调整完成
-      resizeTimeout = setTimeout(() => {
-        if (isMountedRef.current) {
-          const newMaxWidth = calculateMaxWidth();
-          setState(prev => {
-            // 只有当宽度真正变化时才更新状态
-            if (prev.maxWidth !== newMaxWidth) {
-              return { ...prev, maxWidth: newMaxWidth };
-            }
-            return prev;
-          });
-        }
-      }, 100);
-    };
-
-    // 监听 stdout 的 resize 事件
-    process.stdout.on('resize', handleResize);
-
-    return () => {
-      // 清理定时器和事件监听
-      if (resizeTimeout) {
-        clearTimeout(resizeTimeout);
-      }
-      process.stdout.off('resize', handleResize);
-    };
-  }, [calculateMaxWidth]);
+  // Track terminal dimensions from Ink to avoid manual resize side effects
+  const [terminalWidth] = useStdoutDimensions();
+  const contentMaxWidth = Math.min(propMaxWidth, Math.max(20, terminalWidth - 4));
 
   // Handle user input submission
   const handleSubmit = useCallback(async (input: string) => {
@@ -346,16 +306,16 @@ const App: React.FC<AppProps> = ({
             version={version}
             model={state.model}
             sessionId={state.sessionId}
-            maxWidth={state.maxWidth - 2}
+            maxWidth={contentMaxWidth - 2}
           />
         ) : state.messages.length === 0 ? (
-          <EmptyState maxWidth={state.maxWidth - 2} />
+          <EmptyState maxWidth={contentMaxWidth - 2} />
         ) : (
           <ChatPanel
             messages={state.messages}
             streamingContent={state.streamingContent}
             isStreaming={state.isStreaming}
-            maxWidth={state.maxWidth - 2}
+            maxWidth={contentMaxWidth - 2}
           />
         )}
 
@@ -378,14 +338,14 @@ const App: React.FC<AppProps> = ({
           onCancel={handleCancel}
           disabled={state.isStreaming || state.status === 'stopped'}
           maxLength={2000}
-          maxWidth={state.maxWidth - 2}
+          maxWidth={contentMaxWidth - 2}
           showCharCount={false}
         />
       </Box>
 
       {/* 状态栏 - 合并状态指示器、模型、处理消息和Token */}
       <Box marginTop={1} paddingX={1} borderStyle="single" borderColor={colors.gray[700]}>
-        <Box justifyContent="space-between" width={state.maxWidth - 6}>
+        <Box justifyContent="space-between" width={contentMaxWidth - 6}>
           <Box>
             <Text color={state.status === 'processing' ? colors.info : colors.success} bold>
               {state.status === 'processing' ? '◐' : '●'} {state.model}
