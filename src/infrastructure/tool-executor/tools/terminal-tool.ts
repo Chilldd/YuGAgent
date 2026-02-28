@@ -3,7 +3,7 @@
  * Executes shell commands using child_process.exec
  */
 
-import { exec, spawn } from 'node:child_process';
+import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { isWindows } from '../utils.js';
 
@@ -69,6 +69,53 @@ export interface TerminalToolResult {
 export class TerminalTool {
   private config: Required<TerminalToolConfig>;
 
+  /**
+   * 检查文本中的乱码特征（Unicode 替换字符）
+   * @param text - 待检查文本
+   * @returns 是否包含乱码特征
+   */
+  private hasReplacementCharacter(text: string): boolean {
+    return text.includes('�');
+  }
+
+  /**
+   * 解码命令输出，优先 UTF-8，必要时在 Windows 下回退到 GBK
+   * @param output - 原始输出（字符串或 Buffer）
+   * @returns 解码后的文本
+   */
+  private decodeOutput(output: string | Buffer | undefined): string {
+    if (!output) {
+      return '';
+    }
+
+    if (typeof output === 'string') {
+      return output;
+    }
+
+    // step1. 优先按 UTF-8 解码
+    const utf8Text = output.toString('utf8');
+    if (!this.hasReplacementCharacter(utf8Text)) {
+      return utf8Text;
+    }
+
+    // step2. Windows 场景回退 GBK，减少中文乱码
+    if (isWindows()) {
+      try {
+        const gbkText = new TextDecoder('gbk').decode(output);
+        const utf8ReplacementCount = (utf8Text.match(/�/g) || []).length;
+        const gbkReplacementCount = (gbkText.match(/�/g) || []).length;
+
+        if (gbkReplacementCount < utf8ReplacementCount) {
+          return gbkText;
+        }
+      } catch {
+        // 忽略回退失败，保留 UTF-8 结果
+      }
+    }
+
+    return utf8Text;
+  }
+
   constructor(config: TerminalToolConfig = {}) {
     this.config = {
       maxTimeout: config.maxTimeout ?? 600000, // 10 minutes default
@@ -127,14 +174,14 @@ export class TerminalTool {
         env: { ...process.env, ...env },
         maxBuffer: this.config.maxOutputSize,
         windowsHide: true,
-        encoding: 'utf8',
+        encoding: 'buffer',
       });
 
       const executionTime = Date.now() - startTime;
 
       return {
-        stdout: this.truncateOutput(stdout),
-        stderr: this.truncateOutput(stderr),
+        stdout: this.truncateOutput(this.decodeOutput(stdout)),
+        stderr: this.truncateOutput(this.decodeOutput(stderr)),
         exitCode: 0,
         timedOut: false,
         executionTime,
@@ -145,7 +192,7 @@ export class TerminalTool {
       // Handle timeout
       if (error.killed && error.signal === 'SIGTERM') {
         return {
-          stdout: error.stdout ? this.truncateOutput(error.stdout) : '',
+          stdout: this.truncateOutput(this.decodeOutput(error.stdout)),
           stderr: `Command timed out after ${execTimeout}ms`,
           exitCode: -1,
           timedOut: true,
@@ -155,8 +202,8 @@ export class TerminalTool {
 
       // Handle other errors
       return {
-        stdout: error.stdout ? this.truncateOutput(error.stdout) : '',
-        stderr: error.stderr ? this.truncateOutput(error.stderr) : error.message,
+        stdout: this.truncateOutput(this.decodeOutput(error.stdout)),
+        stderr: this.truncateOutput(this.decodeOutput(error.stderr) || error.message),
         exitCode: error.code || -1,
         timedOut: false,
         executionTime,
