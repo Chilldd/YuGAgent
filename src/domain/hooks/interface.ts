@@ -14,9 +14,12 @@ export type {
   HookEntry,
 } from './types.js';
 
+export type {
+  IHooksManager,
+} from './types.js';
+
 export {
   HookEvent,
-  IHooksManager,
 } from './types.js';
 
 // Classes and utilities from middleware-chain.ts
