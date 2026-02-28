@@ -20,6 +20,8 @@ class MockModelProvider implements IModelProvider {
   providerId = 'mock-provider';
   private mockResponse: ModelCompleteResponse;
   private mockTokenCount: number = 0;
+  private streamResponses: Array<Partial<ModelCompleteResponse>> = [];
+  private streamCallCount: number = 0;
 
   constructor(mockResponse?: Partial<ModelCompleteResponse>) {
     this.mockResponse = {
@@ -44,17 +46,38 @@ class MockModelProvider implements IModelProvider {
     this.mockTokenCount = count;
   }
 
+  // 设置多个流式响应，按调用顺序返回
+  setStreamResponses(responses: Array<Partial<ModelCompleteResponse>>) {
+    this.streamResponses = responses;
+    this.streamCallCount = 0;
+  }
+
   async complete(): Promise<ModelCompleteResponse> {
     return this.mockResponse;
   }
 
   async *stream(): AsyncGenerator {
-    yield {
-      text: this.mockResponse.text,
-      isComplete: true,
-      usage: this.mockResponse.usage,
-      finishReason: this.mockResponse.finishReason,
-    };
+    // 如果有预设的流式响应，按顺序返回
+    if (this.streamResponses.length > 0) {
+      const response = this.streamResponses[this.streamCallCount % this.streamResponses.length];
+      this.streamCallCount++;
+      yield {
+        text: response.text ?? this.mockResponse.text,
+        isComplete: true,
+        usage: response.usage ?? this.mockResponse.usage,
+        finishReason: response.finishReason ?? this.mockResponse.finishReason,
+        toolCalls: response.toolCalls ?? this.mockResponse.toolCalls,
+      };
+    } else {
+      // 默认返回当前 mock 响应
+      yield {
+        text: this.mockResponse.text,
+        isComplete: true,
+        usage: this.mockResponse.usage,
+        finishReason: this.mockResponse.finishReason,
+        toolCalls: this.mockResponse.toolCalls,
+      };
+    }
   }
 
   countTokens(): number {
@@ -392,12 +415,21 @@ describe('AgentOrchestrator', () => {
         arguments: '{"command": "echo test"}',
       };
 
-      mockModelProvider.setMockResponse({
-        text: '',
-        toolCalls: [toolCall],
-      });
+      // 设置流式响应序列：第一次返回工具调用，第二次返回最终响应
+      mockModelProvider.setStreamResponses([
+        {
+          text: '',
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'tool_calls',
+          toolCalls: [toolCall],
+        },
+        {
+          text: 'Tool execution completed',
+          usage: { promptTokens: 20, completionTokens: 10, totalTokens: 30 },
+          finishReason: 'stop',
+        },
+      ]);
 
-      // After tool call, return final response
       const orchestrator = new AgentOrchestrator(
         mockModelProvider,
         mockContextManager,
@@ -406,28 +438,6 @@ describe('AgentOrchestrator', () => {
         mockToolExecutor,
         { config, allowedTools: ['bash'] }
       );
-
-      // Set up the mock to return a text response after tool call
-      let callCount = 0;
-      vi.spyOn(mockModelProvider, 'complete').mockImplementation(async () => {
-        callCount++;
-        if (callCount === 1) {
-          return {
-            text: '',
-            usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
-            finishReason: 'tool_calls',
-            model: 'mock-model',
-            toolCalls: [toolCall],
-          };
-        } else {
-          return {
-            text: 'Tool execution completed',
-            usage: { promptTokens: 20, completionTokens: 10, totalTokens: 30 },
-            finishReason: 'stop',
-            model: 'mock-model',
-          };
-        }
-      });
 
       const result = await orchestrator.processUserInput('Execute bash command');
 

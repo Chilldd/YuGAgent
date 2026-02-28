@@ -22,6 +22,9 @@ import type {
   ResponseToolResult,
   ResponseTokenUsage,
 } from '../dto/chat.dto.js';
+import { createLogger } from '../../infrastructure/logging/logger.js';
+
+const logger = createLogger('AIService');
 
 /**
  * AI Service - Application layer service for managing AI agent operations
@@ -89,6 +92,7 @@ export class AIService extends EventEmitter {
     this.lastActivity = new Date();
 
     const startTime = Date.now();
+    logger.info('接收用户消息', { length: dto.message?.length || 0 });
 
     try {
       // Emit before message event
@@ -117,10 +121,18 @@ export class AIService extends EventEmitter {
         response.error = result.error.message;
       }
 
+      const duration = Date.now() - startTime;
+      logger.info('消息处理完成', {
+        duration: `${duration}ms`,
+        iterations: result.iterations,
+        toolCalls: result.toolCalls.length,
+        tokens: result.tokenUsage.totalTokens,
+      });
+
       // Emit after message event
       this.emit('afterMessage', {
         response,
-        duration: Date.now() - startTime,
+        duration,
         timestamp: new Date(),
       });
 
@@ -136,6 +148,8 @@ export class AIService extends EventEmitter {
         userInput: dto.message.substring(0, 100), // 只记录前100个字符
         sessionId: this.currentSessionId,
       };
+
+      logger.error('消息处理失败', err);
 
       // Emit error event
       this.emit('messageError', {
@@ -364,6 +378,8 @@ export class AIService extends EventEmitter {
       'beforeSend' as HookEvent,
       'afterReceive' as HookEvent,
       'securityCheck' as HookEvent,
+      'contentChunk' as HookEvent,
+      'messagesUpdate' as HookEvent,
     ];
 
     for (const event of hookEvents) {

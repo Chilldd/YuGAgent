@@ -19,6 +19,9 @@ import type {
   TokenUsage,
 } from './types.js';
 import { MessageRole } from './types.js';
+import { createLogger } from '../../infrastructure/logging/logger.js';
+
+const logger = createLogger('Orchestrator');
 
 /**
  * Default system prompt for YuGAgent
@@ -30,6 +33,16 @@ export const DEFAULT_SYSTEM_PROMPT = `你是 YuGAgent，一个运行在开发者
 - 执行终端命令（在安全规则范围内）
 - 分析和排查问题
 - 协助代码修改
+
+## 重要：输出格式要求
+
+**你必须始终用中文回复用户。**
+
+在调用工具之前，你必须先用自然语言告诉用户你将要做什么。
+
+在工具执行完成后，你必须分析结果并向用户报告。
+
+**不要只调用工具而不说话**。每次工具调用前后，都应该有相应的文本说明。
 
 请始终以简洁、专业的方式回答问题。`;
 
@@ -193,6 +206,7 @@ export class AgentOrchestrator extends EventEmitter {
   async processUserInput(userInput: string): Promise<ThoughtLoopResult> {
     // step1. 验证用户输入
     this.validateUserInput(userInput);
+    logger.info('开始处理用户输入', { inputLength: userInput.length });
 
     // step2. 检查是否正在处理
     if (this.processingState.isProcessing) {
@@ -204,6 +218,7 @@ export class AgentOrchestrator extends EventEmitter {
     this.processingState.lastError = undefined;
 
     try {
+      logger.debug('触发 start hook');
       // Trigger start hook
       await this.hooksManager.emit('start' as any, {
         sessionId: this.sessionId,
@@ -270,8 +285,11 @@ export class AgentOrchestrator extends EventEmitter {
     let finalResponse = '';
     let iteration = 0;
 
+    logger.debug('开始思考循环', { maxIterations: this.maxThoughtIterations });
+
     for (iteration = 0; iteration < this.maxThoughtIterations; iteration++) {
       this.processingState.currentIteration = iteration + 1;
+      logger.info(`=== 思考迭代 ${iteration + 1}/${this.maxThoughtIterations} ===`);
 
       // Trigger thinking hook
       await this.hooksManager.emit('thinking' as any, {
@@ -290,8 +308,18 @@ export class AgentOrchestrator extends EventEmitter {
         data: { iteration: iteration + 1 },
       });
 
-      // Call model
-      const modelResponse = await this.modelProvider.complete({
+      logger.debug('调用模型（流式）', {
+        messageCount: messages.length,
+        model: this.config.model,
+      });
+
+      // step1. 使用流式 API 获取模型响应
+      let currentText = '';
+      let currentToolCalls: typeof allToolCalls = [];
+      let currentFinishReason: ModelCompleteResponse['finishReason'] = 'stop';
+
+      // step2. 遍历流式响应
+      for await (const chunk of this.modelProvider.stream({
         messages,
         model: this.config.model,
         temperature: this.config.temperature,
@@ -299,47 +327,156 @@ export class AgentOrchestrator extends EventEmitter {
         topP: this.config.topP,
         tools: this.getToolDefinitions(),
         toolChoice: 'auto',
+      })) {
+        // step3. 累积文本内容
+        if (chunk.text) {
+          currentText += chunk.text;
+
+          // step4. 实时发出内容块事件
+          await this.hooksManager.emit('contentChunk' as any, {
+            sessionId: this.sessionId,
+            messages: this.contextManager.getMessages(),
+            data: {
+              iteration: iteration + 1,
+              content: chunk.text,
+              isComplete: false,
+            },
+          });
+        }
+
+        // step5. 收集最终数据（仅在最后一个块中）
+        if (chunk.isComplete) {
+          // 收集工具调用
+          if (chunk.toolCalls && chunk.toolCalls.length > 0) {
+            // 添加预解析的 args
+            currentToolCalls = chunk.toolCalls.map(tc => ({
+              ...tc,
+              // arguments 可能是字符串或对象，安全处理
+              args: tc.arguments
+                ? (typeof tc.arguments === 'string' ? JSON.parse(tc.arguments) : tc.arguments)
+                : undefined,
+            }));
+          }
+
+          // 获取 finishReason
+          if (chunk.finishReason) {
+            currentFinishReason = chunk.finishReason;
+          }
+
+          // step6. 累积 token 使用量
+          if (chunk.usage) {
+            totalTokenUsage.promptTokens += chunk.usage.promptTokens;
+            totalTokenUsage.completionTokens += chunk.usage.completionTokens;
+            totalTokenUsage.totalTokens += chunk.usage.totalTokens;
+          }
+
+          logger.info('模型流式响应完成', {
+            textLength: currentText.length,
+            toolCallsCount: currentToolCalls.length,
+            finishReason: currentFinishReason,
+            tokens: chunk.usage,
+          });
+        }
+      }
+
+      logger.info('流式处理循环结束', {
+        textLength: currentText.length,
+        toolCallsCount: currentToolCalls.length,
+        finishReason: currentFinishReason,
       });
 
-      // Accumulate token usage
-      totalTokenUsage.promptTokens += modelResponse.usage.promptTokens;
-      totalTokenUsage.completionTokens += modelResponse.usage.completionTokens;
-      totalTokenUsage.totalTokens += modelResponse.usage.totalTokens;
+      // step7. 如果有工具调用但没有文本，自动生成说明文本
+      if (currentToolCalls.length > 0 && currentText.length === 0) {
+        const toolDescriptions = currentToolCalls.map(tc => {
+          const toolName = tc.name;
+          // 根据工具类型生成中文说明
+          switch (toolName) {
+            case 'terminal':
+              const cmd = (tc.args as any)?.command || '';
+              return `执行命令：\`${cmd}\``;
+            case 'file-read':
+              const path = (tc.args as any)?.path || '';
+              return `读取文件：\`${path}\``;
+            case 'directory-list':
+              const dirPath = (tc.args as any)?.path || '.';
+              return `列出目录：\`${dirPath}\``;
+            default:
+              return `调用工具：${toolName}`;
+          }
+        });
+        currentText = toolDescriptions.join('\n\n');
 
-      // Trigger after receive hook
+        // 触发流式输出事件，让 UI 实时显示
+        await this.hooksManager.emit('contentChunk' as any, {
+          sessionId: this.sessionId,
+          messages: this.contextManager.getMessages(),
+          data: {
+            iteration: iteration + 1,
+            content: currentText,
+            isComplete: true,
+          },
+        });
+
+        logger.debug('自动生成工具调用说明文本', { text: currentText });
+      }
+
+      // step8. 触发 after receive hook
       await this.hooksManager.emit('afterReceive' as any, {
         sessionId: this.sessionId,
         messages,
         data: {
           iteration: iteration + 1,
-          response: modelResponse,
+          response: {
+            text: currentText,
+            toolCalls: currentToolCalls,
+            usage: totalTokenUsage,
+            finishReason: currentFinishReason,
+          },
         },
       });
 
-      // Add assistant response to context
+      // step9. 添加助手响应到上下文
       const assistantMessage: ChatMessage = {
         role: MessageRole.ASSISTANT,
-        content: modelResponse.text,
-        toolCalls: modelResponse.toolCalls,
+        content: currentText,
+        toolCalls: currentToolCalls.length > 0 ? currentToolCalls : undefined,
         metadata: {
           sessionId: this.sessionId,
           timestamp: new Date().toISOString(),
-          tokenUsage: modelResponse.usage,
-          finishReason: modelResponse.finishReason,
+          tokenUsage: totalTokenUsage,
+          finishReason: currentFinishReason,
         },
       };
 
       this.contextManager.addMessage(assistantMessage);
 
-      // Check if model made tool calls
-      if (modelResponse.toolCalls && modelResponse.toolCalls.length > 0) {
-        allToolCalls.push(...modelResponse.toolCalls);
+      // step9.1 触发消息更新事件，让 UI 立即显示助手消息
+      await this.hooksManager.emit('messagesUpdate' as any, {
+        sessionId: this.sessionId,
+        messages: this.contextManager.getMessages(),
+        data: {
+          iteration: iteration + 1,
+          isComplete: false,
+          hasToolCalls: currentToolCalls.length > 0,
+        },
+      });
 
-        // Execute tool calls
-        const toolResults = await this.executeToolCalls(modelResponse.toolCalls);
+      // step10. 检查是否有工具调用
+      if (currentToolCalls.length > 0) {
+        logger.info(`检测到工具调用`, {
+          toolNames: currentToolCalls.map(tc => tc.name),
+          textLength: currentText.length,
+        });
+        const toolNames = currentToolCalls.map(tc => tc.name);
+        logger.info(`执行工具: ${toolNames.join(', ')}`, { count: currentToolCalls.length });
+
+        allToolCalls.push(...currentToolCalls);
+
+        // step11. 执行工具调用
+        const toolResults = await this.executeToolCalls(currentToolCalls);
         allToolResults.push(...toolResults);
 
-        // Add tool results to context
+        // step12. 添加工具结果到上下文
         for (const result of toolResults) {
           const toolMessage: ChatMessage = {
             role: MessageRole.TOOL,
@@ -357,16 +494,28 @@ export class AgentOrchestrator extends EventEmitter {
           this.contextManager.addMessage(toolMessage);
         }
 
-        // Continue the loop
+        // step12.1 触发消息更新事件，让 UI 立即显示当前的消息状态
+        await this.hooksManager.emit('messagesUpdate' as any, {
+          sessionId: this.sessionId,
+          messages: this.contextManager.getMessages(),
+          data: {
+            iteration: iteration + 1,
+            toolResults,
+            isComplete: false,
+          },
+        });
+
+        // step13. 继续循环
+        logger.info('工具执行完成，继续思考循环');
         continue;
       }
 
-      // No tool calls - this is the final response
-      finalResponse = modelResponse.text;
+      // step14. 无工具调用 - 这是最终响应
+      finalResponse = currentText;
       break;
     }
 
-    // Check if we hit max iterations
+    // step15. 检查是否达到最大迭代次数
     if (iteration >= this.maxThoughtIterations && !finalResponse) {
       finalResponse = 'I reached the maximum number of thinking iterations. Please provide more context or simplify your request.';
     }
@@ -390,9 +539,20 @@ export class AgentOrchestrator extends EventEmitter {
   private async executeToolCalls(toolCalls: ToolCall[]): Promise<ToolResult[]> {
     const results: ToolResult[] = [];
 
+    logger.debug(`开始执行 ${toolCalls.length} 个工具调用`);
+
     for (const toolCall of toolCalls) {
+      // 打印详细的工具调用信息用于调试
+      logger.info(`→ 执行工具: ${toolCall.name}`, {
+        id: toolCall.id,
+        arguments: toolCall.arguments,
+        args: toolCall.args,
+        argsLength: toolCall.arguments?.length || 0,
+      });
+
       // Check if tool is allowed
       if (!this.allowedTools.has(toolCall.name)) {
+        logger.warn(`工具 ${toolCall.name} 不在允许列表中`);
         const result: ToolResult = {
           toolCallId: toolCall.id,
           toolName: toolCall.name,
@@ -425,8 +585,14 @@ export class AgentOrchestrator extends EventEmitter {
         if (paramCount > 100) {
           throw new Error('Too many parameters (max: 100)');
         }
+
+        logger.debug(`工具 ${toolCall.name} 参数解析成功`, {
+          paramCount,
+          argsSize: argsString.length,
+        });
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.error(`工具 ${toolCall.name} 参数解析失败: ${errorMessage}`, error);
         const result: ToolResult = {
           toolCallId: toolCall.id,
           toolName: toolCall.name,
@@ -484,6 +650,15 @@ export class AgentOrchestrator extends EventEmitter {
 
         results.push(result);
 
+        if (response.result.success) {
+          logger.info(`✓ 工具 ${toolCall.name} 执行成功`, {
+            duration: `${duration}ms`,
+            outputSize: result.output?.length || 0,
+          });
+        } else {
+          logger.warn(`✗ 工具 ${toolCall.name} 执行失败: ${response.result.error}`);
+        }
+
         // Trigger after tool hook
         await this.hooksManager.emit('afterTool' as any, {
           sessionId: this.sessionId,
@@ -495,6 +670,8 @@ export class AgentOrchestrator extends EventEmitter {
       } catch (error) {
         const duration = Date.now() - startTime;
         const err = error instanceof Error ? error : new Error(String(error));
+
+        logger.error(`✗ 工具 ${toolCall.name} 执行异常`, err);
 
         const result: ToolResult = {
           toolCallId: toolCall.id,

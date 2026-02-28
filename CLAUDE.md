@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 项目规范
 1. 文档，注释等都必须使用中文
 2. 重要的方法逻辑必须增加日志记录，使用不同的日志等级控制日志输出量
-3. 方法逻辑复杂时，必须增加注释说明方法逻辑，注释风格为：
+3. 方法逻辑复杂多步骤时，必须增加注释说明方法逻辑，注释风格为：
 // step1. xxx
 // step2. xxx
 4. 方法必须有文档注释

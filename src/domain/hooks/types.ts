@@ -34,6 +34,10 @@ export enum HookEvent {
   MEMORY_WRITE = 'memoryWrite',
   /** Context updates */
   CONTEXT_UPDATE = 'contextUpdate',
+  /** 流式内容块事件 */
+  CONTENT_CHUNK = 'contentChunk',
+  /** 中间消息更新事件（工具执行完成后立即更新 UI） */
+  MESSAGES_UPDATE = 'messagesUpdate',
 }
 
 /**

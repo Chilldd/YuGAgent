@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Box, Text, render, useStdoutDimensions } from 'ink';
+import { Box, Text, render, useStdout } from 'ink';
 
 import { ChatPanel, WelcomeMessage, EmptyState } from './components/ChatPanel.js';
 import { StatusPanel } from './components/StatusPanel.js';
@@ -69,6 +69,25 @@ const App: React.FC<AppProps> = ({
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isMountedRef = useRef(true);
+
+  // Loading 动画帧
+  const loadingFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  const [loadingFrameIndex, setLoadingFrameIndex] = useState(0);
+
+  // Loading 动画定时器
+  useEffect(() => {
+    // 只在处理状态时启动动画
+    if (state.status !== 'processing') {
+      setLoadingFrameIndex(0);
+      return;
+    }
+
+    const interval = setInterval(() => {
+      setLoadingFrameIndex(prev => (prev + 1) % loadingFrames.length);
+    }, 100);
+
+    return () => clearInterval(interval);
+  }, [state.status, loadingFrames.length]);
 
   // Initialize app and setup event listeners
   useEffect(() => {
@@ -135,6 +154,25 @@ const App: React.FC<AppProps> = ({
               status: 'processing' as ServiceStatus,
               processingMessage: 'AI is thinking...',
             }));
+            break;
+          case 'contentChunk':
+            // step1. 实时追加流式内容
+            setState(prev => ({
+              ...prev,
+              streamingContent: (prev.streamingContent || '') + (data.data?.content || ''),
+            }));
+            break;
+          case 'messagesUpdate':
+            // step2. 工具执行完成后，立即更新消息列表并清空流式内容
+            const contextForUpdate = aiService.getContext();
+            if (contextForUpdate) {
+              const updatedMessages = contextForUpdate.getMessages();
+              setState(prev => ({
+                ...prev,
+                messages: [...updatedMessages],
+                streamingContent: '',
+              }));
+            }
             break;
           case 'beforeTool':
             const toolName = data.data?.toolCall?.name || 'unknown';
@@ -220,7 +258,8 @@ const App: React.FC<AppProps> = ({
   }, [aiService]);
 
   // Track terminal dimensions from Ink to avoid manual resize side effects
-  const [terminalWidth] = useStdoutDimensions();
+  const { stdout } = useStdout();
+  const terminalWidth = stdout.columns || 80;
   const contentMaxWidth = Math.min(propMaxWidth, Math.max(20, terminalWidth - 4));
 
   // Handle user input submission
@@ -347,18 +386,31 @@ const App: React.FC<AppProps> = ({
       <Box marginTop={1} paddingX={1} borderStyle="single" borderColor={colors.gray[700]}>
         <Box justifyContent="space-between" width={contentMaxWidth - 6}>
           <Box>
-            <Text color={state.status === 'processing' ? colors.info : colors.success} bold>
-              {state.status === 'processing' ? '◐' : '●'} {state.model}
-            </Text>
+            {state.status === 'processing' ? (
+              <Text color={colors.info} bold>
+                {loadingFrames[loadingFrameIndex]} <Text color={colors.success}>{state.model}</Text>
+              </Text>
+            ) : (
+              <Text color={colors.success} bold>
+                ● {state.model}
+              </Text>
+            )}
             {state.processingMessage && (
               <Text dimColor> | {state.processingMessage}</Text>
             )}
           </Box>
-          {state.tokenUsage.totalTokens > 0 && (
-            <Text dimColor>
-              Tokens: <Text color={colors.warning}>{state.tokenUsage.totalTokens}</Text>
-            </Text>
-          )}
+          <Box>
+            {state.status === 'processing' && (
+              <Text color={colors.info} bold>
+                {loadingFrames[loadingFrameIndex]}
+              </Text>
+            )}
+            {state.tokenUsage.totalTokens > 0 && (
+              <Text dimColor>
+                Tokens: <Text color={colors.warning}>{state.tokenUsage.totalTokens}</Text>
+              </Text>
+            )}
+          </Box>
         </Box>
       </Box>
 

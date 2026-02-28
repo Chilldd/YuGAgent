@@ -3,8 +3,9 @@
  * Executes shell commands using child_process.exec
  */
 
-import { exec } from 'node:child_process';
+import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
+import { isWindows } from '../utils.js';
 
 const execAsync = promisify(exec);
 
@@ -113,12 +114,20 @@ export class TerminalTool {
     const startTime = Date.now();
 
     try {
-      const { stdout, stderr } = await execAsync(command, {
+      // step1. 在 Windows 上处理编码问题
+      let finalCommand = command;
+      if (isWindows()) {
+        // 在 Windows 上设置控制台编码为 UTF-8，然后执行命令
+        finalCommand = `chcp 65001 >nul 2>&1 && ${command}`;
+      }
+
+      const { stdout, stderr } = await execAsync(finalCommand, {
         cwd,
         timeout: execTimeout,
         env: { ...process.env, ...env },
         maxBuffer: this.config.maxOutputSize,
         windowsHide: true,
+        encoding: 'utf8',
       });
 
       const executionTime = Date.now() - startTime;

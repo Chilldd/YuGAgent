@@ -17,6 +17,9 @@ import type {
   StreamChunk,
 } from '../interface.js';
 import type { ZhipuConfig } from './config.js';
+import { createLogger } from '../../logging/logger.js';
+
+const logger = createLogger('ZhipuAdapter');
 
 /**
  * Zhipu AI Model Provider implementation
@@ -96,7 +99,13 @@ export class ZhipuModelProvider implements IModelProvider {
         generationParams.stop = request.stopSequences;
       }
       if (request.tools) {
-        generationParams.tools = this.convertToolsToAISDK(request.tools);
+        const convertedTools = this.convertToolsToAISDK(request.tools);
+        generationParams.tools = convertedTools;
+        // 调试日志：记录转换后的工具定义
+        logger.debug('工具定义已转换为 AI SDK 格式', {
+          toolsCount: convertedTools.length,
+          tools: JSON.stringify(convertedTools, null, 2),
+        });
       }
       if (request.toolChoice) {
         generationParams.toolChoice = request.toolChoice;
@@ -105,8 +114,26 @@ export class ZhipuModelProvider implements IModelProvider {
         generationParams.headers = request.headers;
       }
 
+      // 调试日志：记录完整的请求参数
+      logger.debug('发送到智谱 AI 的请求参数', {
+        hasTools: !!generationParams.tools,
+        toolsCount: generationParams.tools?.length ?? 0,
+        toolChoice: generationParams.toolChoice,
+        temperature: generationParams.temperature,
+        maxTokens: generationParams.maxTokens,
+      });
+
       // step5. 使用 AI SDK 生成文本
       const result = await generateText(generationParams);
+
+      // step5.5 调试日志 - 记录原始响应
+      logger.debug('智谱 AI 原始响应', {
+        hasToolCalls: !!result.toolCalls,
+        toolCallsLength: result.toolCalls?.length ?? 0,
+        finishReason: result.finishReason,
+        textLength: result.text?.length ?? 0,
+        rawToolCalls: JSON.stringify(result.toolCalls),
+      });
 
       // step6. 构建响应
       const response: ModelCompleteResponse = {
@@ -123,11 +150,96 @@ export class ZhipuModelProvider implements IModelProvider {
 
       // step7. 添加工具调用（如果有）
       if (result.toolCalls && result.toolCalls.length > 0) {
-        response.toolCalls = result.toolCalls.map((tc) => ({
-          id: tc.toolCallId,
-          name: tc.toolName,
-          arguments: tc.args as string,
-        }));
+        response.toolCalls = result.toolCalls
+          .map((tc) => {
+            // 获取工具名称 - 处理智谱 AI SDK 返回 toolName="0" 的问题
+            let toolName = tc.toolName;
+
+            // 尝试从原始响应的多个字段获取工具名称
+            if (!toolName || typeof toolName !== 'string' || toolName === '0') {
+              const rawTc = tc as any;
+              logger.debug('toolName 无效，尝试从其他字段获取', {
+                toolName,
+                toolCallId: tc.toolCallId,
+                rawKeys: Object.keys(rawTc),
+              });
+
+              // 尝试从多个可能的字段获取工具名称
+              if (rawTc.function?.name) {
+                toolName = rawTc.function.name;
+              } else if (rawTc.tool) {
+                toolName = rawTc.tool;
+              } else if (rawTc.name) {
+                toolName = rawTc.name;
+              }
+
+              // 根据 args 的内容推断工具名称（智谱 AI SDK 的 bug 回退）
+              if (!toolName || toolName === '0') {
+                const args = tc.args;
+                if (typeof args === 'object' && args !== null) {
+                  // 根据参数特征推断工具类型
+                  if ('command' in args) {
+                    toolName = 'terminal';
+                  } else if ('path' in args && 'startLine' in args) {
+                    toolName = 'file-read';
+                  } else if ('path' in args && ('recursive' in args || 'depth' in args)) {
+                    toolName = 'directory-list';
+                  }
+                }
+                logger.debug('根据 args 内容推断工具名称', {
+                  inferredToolName: toolName,
+                  argsKeys: typeof args === 'object' ? Object.keys(args) : [],
+                });
+              }
+            }
+
+            // 如果仍然没有有效的工具名称，记录警告并跳过
+            if (!toolName || typeof toolName !== 'string' || toolName === '0') {
+              logger.warn('无法获取有效的工具名称，跳过此工具调用', {
+                toolName,
+                toolCallId: tc.toolCallId,
+                args: tc.args,
+              });
+              return null;
+            }
+
+            // 处理工具调用参数：args 可能是对象或字符串
+            let argumentsStr: string;
+            if (typeof tc.args === 'string') {
+              argumentsStr = tc.args;
+            } else if (typeof tc.args === 'object' && tc.args !== null) {
+              argumentsStr = JSON.stringify(tc.args);
+            } else {
+              argumentsStr = '{}';
+            }
+
+            logger.debug('工具调用解析成功', {
+              toolName,
+              toolCallId: tc.toolCallId,
+              argsLength: argumentsStr.length,
+            });
+
+            return {
+              id: tc.toolCallId,
+              name: toolName,
+              arguments: argumentsStr,
+              // 同时保存预解析的 args 对象供后续使用
+              args: tc.args,
+            };
+          })
+          .filter((tc): tc is NonNullable<typeof tc> => tc !== null);
+      }
+
+      // step8. 修复 finishReason 与 toolCalls 不一致的问题
+      // 如果 finishReason 是 tool_calls 但没有实际的工具调用，这可能是 API 返回了矛盾的响应
+      // 此时应该将 finishReason 改为 stop，避免 orchestrator 进入错误的处理流程
+      if (response.finishReason === 'tool_calls' && (!response.toolCalls || response.toolCalls.length === 0)) {
+        logger.warn('检测到矛盾的模型响应：finishReason 是 tool_calls 但没有实际工具调用，将 finishReason 改为 stop', {
+          originalFinishReason: response.finishReason,
+          toolCallsCount: response.toolCalls?.length ?? 0,
+          textLength: response.text?.length ?? 0,
+        });
+        response.finishReason = 'stop';
       }
 
       return response;
@@ -176,10 +288,12 @@ export class ZhipuModelProvider implements IModelProvider {
       if (!msg.role || typeof msg.role !== 'string') {
         throw new Error(`Message at index ${i} missing valid role`);
       }
-      if (msg.content === undefined || typeof msg.content !== 'string') {
+      // content 可以是字符串（普通消息）或数组（工具调用/结果）
+      if (msg.content === undefined) {
         throw new Error(`Message at index ${i} missing valid content`);
       }
-      if (msg.content.length > 100000) {
+      // 对于字符串类型 content，检查长度
+      if (typeof msg.content === 'string' && msg.content.length > 100000) {
         throw new Error(`Message at index ${i} exceeds maximum length`);
       }
     }
@@ -272,25 +386,143 @@ export class ZhipuModelProvider implements IModelProvider {
       let fullText = '';
       const toolCallsAccumulator: Map<string, { name: string; args: string }> = new Map();
 
-      // Yield text chunks
-      for await (const chunk of result.textStream) {
-        fullText += chunk;
-        yield {
-          text: chunk,
-          isComplete: false,
-        };
+      // 使用 fullStream 而不是 textStream，这样可以同时处理文本和工具调用
+      // @ts-ignore - fullStream 存在但类型定义可能不完整
+      for await (const chunk of result.fullStream) {
+        // 调试日志：记录所有 chunk 类型
+        logger.debug('流式 chunk', {
+          type: chunk.type,
+          hasText: !!(chunk as any).text,
+          textLength: (chunk as any).text?.length || 0,
+          hasReasoning: !!(chunk as any).reasoning,
+          keys: Object.keys(chunk),
+        });
+
+        // 处理不同类型的 chunk
+        switch (chunk.type) {
+          case 'text-delta':
+          case 'text':
+            if (chunk.text) {
+              fullText += chunk.text;
+              logger.debug('文本增量', {
+                text: chunk.text.substring(0, 50),
+                textLength: chunk.text.length,
+                fullTextLength: fullText.length,
+              });
+              yield {
+                text: chunk.text,
+                isComplete: false,
+              };
+            }
+            break;
+
+          // 处理推理内容（某些模型使用这个类型）
+          case 'reasoning-delta':
+          case 'reasoning':
+            if ((chunk as any).reasoning) {
+              const reasoningText = (chunk as any).reasoning;
+              fullText += reasoningText;
+              logger.debug('推理增量', {
+                text: reasoningText.substring(0, 50),
+                textLength: reasoningText.length,
+                fullTextLength: fullText.length,
+              });
+              yield {
+                text: reasoningText,
+                isComplete: false,
+              };
+            }
+            break;
+
+          case 'tool-call-delta':
+          case 'tool-call':
+            // 工具调用的增量信息，收集起来
+            if (chunk.toolCallId && chunk.toolName) {
+              // 调试日志：记录工具调用增量
+              logger.debug('工具调用增量', {
+                toolCallId: chunk.toolCallId,
+                toolName: chunk.toolName,
+                args: chunk.args,
+                argsLength: chunk.args?.length || 0,
+              });
+
+              if (!toolCallsAccumulator.has(chunk.toolCallId)) {
+                toolCallsAccumulator.set(chunk.toolCallId, {
+                  name: chunk.toolName,
+                  args: chunk.args || '',
+                });
+              } else {
+                const existing = toolCallsAccumulator.get(chunk.toolCallId)!;
+                if (chunk.args) {
+                  existing.args += chunk.args;
+                }
+              }
+            }
+            break;
+
+          case 'tool-result':
+            // 工具执行结果，不需要在这里处理
+            break;
+
+          case 'finish':
+          case 'error':
+            // 结束或错误，在最后处理
+            break;
+        }
       }
 
       // Wait for completion to get final metadata
       const finalResult = await result;
 
-      // Collect tool calls if any
+      // Collect tool calls from final result - 优先使用 finalResult 中的完整数据
       const toolCalls = (finalResult as any).toolCalls;
       if (toolCalls && toolCalls.length > 0) {
+        logger.debug('从 finalResult 获取工具调用', {
+          toolCallsCount: toolCalls.length,
+          toolCalls: JSON.stringify(toolCalls),
+        });
+
         for (const tc of toolCalls) {
+          // 获取工具名称 - 处理可能的格式问题
+          let toolName = tc.toolName;
+          if (!toolName || typeof toolName !== 'string' || toolName === '0') {
+            // 尝试从原始响应的其他字段获取工具名称
+            const rawTc = tc as any;
+            if (rawTc.function?.name) {
+              toolName = rawTc.function.name;
+            } else if (rawTc.tool) {
+              toolName = rawTc.tool;
+            }
+          }
+
+          // 如果仍然没有有效的工具名称，跳过此工具调用
+          if (!toolName || typeof toolName !== 'string' || toolName === '0') {
+            logger.warn('跳过无效的工具名称', { toolName: tc.toolName, toolCallId: tc.toolCallId });
+            continue;
+          }
+
+          // 处理工具调用参数
+          let argsStr: string;
+          if (typeof tc.args === 'string') {
+            argsStr = tc.args;
+          } else if (typeof tc.args === 'object' && tc.args !== null) {
+            argsStr = JSON.stringify(tc.args);
+          } else {
+            argsStr = '{}';
+          }
+
+          // 用 finalResult 中的完整数据覆盖 accumulator 中的数据
+          // 因为 finalResult 包含完整的工具调用信息，而 delta 可能只有部分数据
           toolCallsAccumulator.set(tc.toolCallId, {
-            name: tc.toolName,
-            args: tc.args as string,
+            name: toolName,
+            args: argsStr,
+          });
+
+          logger.debug('工具调用已添加到 accumulator', {
+            toolCallId: tc.toolCallId,
+            toolName,
+            args: argsStr,
+            argsLength: argsStr.length,
           });
         }
       }
@@ -305,11 +537,20 @@ export class ZhipuModelProvider implements IModelProvider {
         isComplete: true,
         toolCalls:
           toolCallsAccumulator.size > 0
-            ? Array.from(toolCallsAccumulator.entries()).map(([id, { name, args }]) => ({
+            ? Array.from(toolCallsAccumulator.entries()).map(([id, { name, args }]) => {
+              // 调试日志：检查工具调用参数
+              logger.debug('流式工具调用', {
                 id,
                 name,
-                arguments: args,
-              }))
+                args,
+                argsLength: args?.length || 0,
+              });
+              return {
+                id,
+                name,
+                arguments: args || '{}',
+              };
+            })
             : undefined,
         usage: {
           promptTokens: usage?.promptTokens ?? 0,
@@ -430,39 +671,79 @@ export class ZhipuModelProvider implements IModelProvider {
   }
 
   /**
-   * Convert domain messages to AI SDK format
+   * Convert domain messages to AI SDK format (CoreMessage)
    * @param messages - Domain chat messages
-   * @returns AI SDK compatible messages
+   * @returns AI SDK compatible messages (CoreMessage or UIMessage)
    */
-  private convertMessagesToAISDK(messages: ChatMessage[]): Array<{ role: string; content: string }> {
-    return messages.map((msg) => ({
-      role: msg.role,
-      content: msg.content,
-    }));
+  private convertMessagesToAISDK(messages: ChatMessage[]): Array<any> {
+    return messages.map((msg) => {
+      // step1. 处理带工具调用的 assistant 消息
+      if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
+        return {
+          role: msg.role,
+          content: msg.toolCalls.map((tc) => ({
+            type: 'tool-call',
+            toolCallId: tc.id,
+            toolName: tc.name,
+            // 优先使用预解析的 args 对象，否则从 arguments 字符串解析
+            args: tc.args ?? (typeof tc.arguments === 'string' ? JSON.parse(tc.arguments) : tc.arguments),
+          })),
+        };
+      }
+
+      // step2. 处理工具结果消息
+      if (msg.role === 'tool') {
+        return {
+          role: msg.role,
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: msg.toolCallId || '',
+              toolName: (msg.metadata?.toolName as string) || '',
+              result: msg.content,
+            },
+          ],
+          // tool 消息需要指定 toolCallId
+          ...(msg.toolCallId && { toolCallId: msg.toolCallId }),
+        };
+      }
+
+      // step3. 处理普通文本消息（user, system, assistant without tool calls）
+      return {
+        role: msg.role,
+        content: msg.content,
+      };
+    });
   }
 
   /**
    * Convert tool definitions to AI SDK format
+   * Vercel AI SDK 期望工具定义是一个对象映射（key 是工具名称），而不是数组
    * @param tools - Domain tool definitions
-   * @returns AI SDK compatible tool definitions
+   * @returns AI SDK compatible tool definitions (object format)
    */
-  private convertToolsToAISDK(tools: ModelCompleteRequest['tools']): Array<{
-    type: string;
-    name: string;
+  private convertToolsToAISDK(tools: ModelCompleteRequest['tools']): Record<string, {
     description: string;
     parameters: z.ZodType<any, any>;
   }> {
     if (!tools) {
-      return [];
+      return {};
     }
 
-    return tools.map((tool) => ({
-      type: 'function',
-      name: tool.name,
-      description: tool.description,
-      // 将参数 schema 转换为 Zod schema
-      parameters: this.convertParametersToZod(tool.parameters ?? {}),
-    }));
+    const toolsMap: Record<string, {
+      description: string;
+      parameters: z.ZodType<any, any>;
+    }> = {};
+
+    for (const tool of tools) {
+      toolsMap[tool.name] = {
+        description: tool.description,
+        // 将参数 schema 转换为 Zod schema
+        parameters: this.convertParametersToZod(tool.parameters ?? {}),
+      };
+    }
+
+    return toolsMap;
   }
 
   /**
@@ -482,25 +763,42 @@ export class ZhipuModelProvider implements IModelProvider {
       // 尝试从 JSON Schema 创建 Zod schema
       const schema: Record<string, z.ZodTypeAny> = {};
 
+      // 获取 required 字段列表
+      const requiredFields = Array.isArray(parameters.required)
+        ? new Set(parameters.required as string[])
+        : new Set<string>();
+
       if (parameters.properties && typeof parameters.properties === 'object') {
         for (const [key, value] of Object.entries(parameters.properties as Record<string, any>)) {
           const propSchema = (value as any).type || 'string';
+          let zodType: z.ZodTypeAny;
+
           switch (propSchema) {
             case 'string':
-              schema[key] = z.string();
+              zodType = z.string();
               break;
             case 'number':
-              schema[key] = z.number();
+              zodType = z.number();
               break;
             case 'boolean':
-              schema[key] = z.boolean();
+              zodType = z.boolean();
               break;
             case 'array':
-              schema[key] = z.array(z.any());
+              zodType = z.array(z.any());
+              break;
+            case 'object':
+              zodType = z.object({}).passthrough();
               break;
             default:
-              schema[key] = z.any();
+              zodType = z.any();
           }
+
+          // 如果字段不在 required 列表中，设为可选
+          if (!requiredFields.has(key)) {
+            zodType = zodType.optional();
+          }
+
+          schema[key] = zodType;
         }
       }
 
