@@ -43,6 +43,7 @@ interface AppState {
   processingMessage: string;
   showWelcome: boolean;
   error: string | null;
+  maxWidth: number;
 }
 
 /**
@@ -52,8 +53,13 @@ const App: React.FC<AppProps> = ({
   aiService,
   appName = 'YuGAgent',
   version = '2.0.0',
-  maxWidth = 100,
+  maxWidth: propMaxWidth = 100,
 }) => {
+  // step1. 动态计算终端宽度，响应窗口大小变化
+  const calculateMaxWidth = useCallback(() => {
+    return Math.min(propMaxWidth, (process.stdout.columns || 80) - 4);
+  }, [propMaxWidth]);
+
   const [state, setState] = useState<AppState>({
     messages: [],
     streamingContent: '',
@@ -65,6 +71,7 @@ const App: React.FC<AppProps> = ({
     processingMessage: '',
     showWelcome: true,
     error: null,
+    maxWidth: calculateMaxWidth(),
   });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -219,6 +226,47 @@ const App: React.FC<AppProps> = ({
     };
   }, [aiService]);
 
+  // step2. 监听终端大小变化，使用 debounce 并强制重新挂载组件防止内容重复
+  useEffect(() => {
+    let resizeTimeout: NodeJS.Timeout | null = null;
+
+    const handleResize = () => {
+      // 清除之前的定时器，实现 debounce 效果
+      if (resizeTimeout) {
+        clearTimeout(resizeTimeout);
+      }
+
+      // 延迟 100ms 执行，等待窗口调整完成
+      resizeTimeout = setTimeout(() => {
+        if (isMountedRef.current) {
+          // step1. 清除终端屏幕，防止旧内容残留
+          // 使用 ANSI 转义序列清除整个屏幕
+          process.stdout.write('\x1b[2J\x1b[H');
+
+          const newMaxWidth = calculateMaxWidth();
+          setState(prev => {
+            // 只有当宽度真正变化时才更新状态
+            if (prev.maxWidth !== newMaxWidth) {
+              return { ...prev, maxWidth: newMaxWidth };
+            }
+            return prev;
+          });
+        }
+      }, 100);
+    };
+
+    // 监听 stdout 的 resize 事件
+    process.stdout.on('resize', handleResize);
+
+    return () => {
+      // 清理定时器和事件监听
+      if (resizeTimeout) {
+        clearTimeout(resizeTimeout);
+      }
+      process.stdout.off('resize', handleResize);
+    };
+  }, [calculateMaxWidth]);
+
   // Handle user input submission
   const handleSubmit = useCallback(async (input: string) => {
     if (!aiService.isReady() || state.isStreaming) {
@@ -294,26 +342,28 @@ const App: React.FC<AppProps> = ({
   const chatHeight = process.stdout.rows ? Math.max(10, process.stdout.rows - 8) : 20;
 
   return (
-    <Box flexDirection="column" paddingX={1}>
+    <Box flexDirection="column" paddingX={1} key={`main-${state.maxWidth}`}>
       {/* Main content area */}
       <Box flexDirection="column" marginBottom={1} flexGrow={1}>
         {/* Welcome message or chat panel */}
         {state.showWelcome ? (
           <WelcomeMessage
+            key={`welcome-${state.maxWidth}`}
             appName={appName}
             version={version}
             model={state.model}
             sessionId={state.sessionId}
-            maxWidth={maxWidth - 2}
+            maxWidth={state.maxWidth - 2}
           />
         ) : state.messages.length === 0 ? (
-          <EmptyState maxWidth={maxWidth - 2} />
+          <EmptyState key={`empty-${state.maxWidth}`} maxWidth={state.maxWidth - 2} />
         ) : (
           <ChatPanel
+            key={`chat-${state.maxWidth}`}
             messages={state.messages}
             streamingContent={state.streamingContent}
             isStreaming={state.isStreaming}
-            maxWidth={maxWidth - 2}
+            maxWidth={state.maxWidth - 2}
           />
         )}
 
@@ -336,14 +386,14 @@ const App: React.FC<AppProps> = ({
           onCancel={handleCancel}
           disabled={state.isStreaming || state.status === 'stopped'}
           maxLength={2000}
-          maxWidth={maxWidth - 2}
+          maxWidth={state.maxWidth - 2}
           showCharCount={false}
         />
       </Box>
 
       {/* 状态栏 - 合并状态指示器、模型、处理消息和Token */}
       <Box marginTop={1} paddingX={1} borderStyle="single" borderColor={colors.gray[700]}>
-        <Box justifyContent="space-between" width={maxWidth - 6}>
+        <Box justifyContent="space-between" width={state.maxWidth - 6}>
           <Box>
             <Text color={state.status === 'processing' ? colors.info : colors.success} bold>
               {state.status === 'processing' ? '◐' : '●'} {state.model}
@@ -421,7 +471,6 @@ export function startTUI(
       aiService={aiService}
       appName={appName}
       version={version}
-      maxWidth={Math.min(120, (process.stdout.columns || 80) - 4)}
     />
   );
 
