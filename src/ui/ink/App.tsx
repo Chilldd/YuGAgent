@@ -155,24 +155,25 @@ const App: React.FC<AppProps> = ({
               processingMessage: 'AI is thinking...',
             }));
             break;
-          case 'contentChunk':
-            // step1. 实时追加流式内容
-            setState(prev => ({
-              ...prev,
-              streamingContent: (prev.streamingContent || '') + (data.data?.content || ''),
-            }));
-            break;
-          case 'messagesUpdate':
-            // step2. 工具执行完成后，立即更新消息列表并清空流式内容
-            const contextForUpdate = aiService.getContext();
-            if (contextForUpdate) {
-              const updatedMessages = contextForUpdate.getMessages();
+          case 'contentChunk': {
+            // Hook payload 结构: { event, data: HookContext }
+            // 内容位于 HookContext.data.content
+            const chunkContent = data.data?.data?.content;
+            if (typeof chunkContent === 'string' && chunkContent.length > 0) {
               setState(prev => ({
                 ...prev,
-                messages: [...updatedMessages],
-                streamingContent: '',
+                streamingContent: (prev.streamingContent || '') + chunkContent,
               }));
             }
+            break;
+          }
+          case 'messagesUpdate':
+            // 优先使用 hook 事件内的最新消息，避免等待 sendMessage 完成后才更新
+            setState(prev => ({
+              ...prev,
+              messages: Array.isArray(data.data?.messages) ? [...data.data.messages] : prev.messages,
+              streamingContent: '',
+            }));
             break;
           case 'beforeTool':
             const toolName = data.data?.toolCall?.name || 'unknown';
